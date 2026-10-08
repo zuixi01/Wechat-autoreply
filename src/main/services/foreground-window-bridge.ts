@@ -130,7 +130,10 @@ export class ForegroundWindowBridge implements ForegroundWindows {
             finish(new Error('window_query_failed'))
           }
         })
-        timer = setTimeout(() => finish(new Error('window_query_failed')), 5000)
+        // Native typing paces complete Unicode characters. Allow that bounded
+        // duration while retaining immediate cancellation and foreground checks.
+        const timeoutMs = 5000 + (command === 'type' ? (text?.length ?? 0) * 40 : 0)
+        timer = setTimeout(() => finish(new Error('window_query_failed')), timeoutMs)
         signal.addEventListener('abort', abort, { once: true })
         if (signal.aborted) {
           abort()

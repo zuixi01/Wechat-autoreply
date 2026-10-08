@@ -19,10 +19,23 @@ internal static class Program {
  [DllImport("user32.dll")] static extern bool IsIconic(nint window);
  [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(nint window,int attribute,out Rect rect,int size);
  [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(nint context);
- [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,Input[] inputs,int size);
+ [DllImport("user32.dll",SetLastError=true)] static extern bool GetGUIThreadInfo(uint thread,ref GuiThreadInfo info);
+ [DllImport("user32.dll")] static extern nint GetAncestor(nint window,uint flags);
+ [DllImport("user32.dll")] static extern bool IsWindowUnicode(nint window);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern nint SendMessageTimeoutW(nint window,uint message,nuint character,nint parameter,uint flags,uint timeout,out nuint result);
  [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
  static readonly JsonSerializerOptions Json=new(){PropertyNamingPolicy=JsonNamingPolicy.CamelCase,UnmappedMemberHandling=System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow};
  static string Foreground()=>GetForegroundWindow().ToInt64().ToString();
+ static nint Editor(nint handle,int pid) {
+  if(GetForegroundWindow()!=handle) throw new Exception("foreground_lost");
+  var thread=GetWindowThreadProcessId(handle,out var owner);
+  var info=new GuiThreadInfo{Size=(uint)Marshal.SizeOf<GuiThreadInfo>()};
+  if(owner!=pid || !GetGUIThreadInfo(thread,ref info) || info.Focus==0 ||
+   GetAncestor(info.Focus,2)!=handle || !IsWindowUnicode(info.Focus)) throw new Exception("input_state_changed");
+  GetWindowThreadProcessId(info.Focus,out var editorOwner);
+  if(editorOwner!=pid) throw new Exception("input_state_changed");
+  return info.Focus;
+ }
  static Binding[] Windows() {
   var list=new List<Binding>();
   EnumWindows((window,_)=>{
@@ -56,14 +69,19 @@ internal static class Program {
       if(IsIconic(handle)) ShowWindow(handle,9);SetForegroundWindow(handle);
      } else {
       var text=root.GetProperty("text").GetString();UnicodeInput.Validate(text);
-      if(nint.Size!=8 || Marshal.SizeOf<Input>()!=40) throw new Exception("input_failed");
-      // Each Unicode press MUST have a release. RobotJS omits the release on
-      // Windows, which made WeChat repeat the first Chinese character.
-      foreach(var character in text!) {
-       if(GetForegroundWindow()!=handle) throw new Exception("foreground_lost");
+      if(nint.Size!=8 || Marshal.SizeOf<GuiThreadInfo>()!=72) throw new Exception("input_failed");
+      var editor=Editor(handle,selected.Pid);
+      // WM_CHAR supplies UTF16 directly, avoiding VK_PACKET/IME conversion of
+      // fullwidth punctuation. Only the bound foreground editor is eligible.
+      // https://learn.microsoft.com/windows/win32/inputdev/wm-char
+      foreach(var characters in UnicodeInput.Characters(text!)) {
+       if(Editor(handle,selected.Pid)!=editor) throw new Exception("input_state_changed");
        if(new[]{0x10,0x11,0x12,0x5B,0x5C}.Any(key=>(GetAsyncKeyState(key)&0x8000)!=0)) throw new Exception("input_state_changed");
-       var pair=UnicodeInput.Pair(character);
-       if(SendInput(2,pair,Marshal.SizeOf<Input>())!=2) throw new Exception("input_failed");
+       foreach(var character in characters) {
+        if(Editor(handle,selected.Pid)!=editor) throw new Exception("input_state_changed");
+        if(SendMessageTimeoutW(editor,0x0102,character,1,3,500,out _)==0) throw new Exception("input_failed");
+       }
+       Thread.Sleep(UnicodeInput.CharacterDelayMs);
       }
      }
     } else if(command!="inspect") throw new Exception("request_invalid");

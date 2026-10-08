@@ -32,7 +32,7 @@ npm run test:desktop:release
 
 With an explicitly authorized contact, `npm run test:wechat -- --target "Exact name"` runs the real application and provider. It waits for a new inbound message, confirms one new outbound reply, then pauses and exits. It reports failure when no new message arrives or validation fails. Add `--current-chat` only after selecting the intended chat manually.
 
-The pinned Windows helper types Chinese and other Unicode text using paired key-down/key-up events, without the clipboard. The application rereads the complete draft before pressing Enter. Initial connection allows a short wait for WeChat to return to the foreground.
+The pinned Windows helper writes Unicode character messages to the verified focused control in the foreground WeChat window, without the clipboard. It checks the window, process and focused control before every character. The application rereads the complete draft before pressing Enter. Initial connection allows a short wait for WeChat to return to the foreground.
 
 Successful Windows builds retain two successful releases and recent diagnostics. `npm run clean:artifacts` previews cleanup; add `-- --apply` to execute it. Only allowlisted generated caches are eligible. Source, dependencies, toolchains, user profiles, databases and personal acceptance reports are preserved. Directory junctions are never followed.
 

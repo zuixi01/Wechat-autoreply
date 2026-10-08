@@ -1,19 +1,18 @@
 using System.Runtime.InteropServices;
+using System.Text;
 
-// Windows x64 INPUT is 40 bytes: the union starts at offset 8 and KEYBDINPUT
-// has its pointer-sized extra-info field at offset 16. Match the Win32 ABI.
 [StructLayout(LayoutKind.Sequential)]
-internal struct KeyboardInput {
- public ushort VirtualKey,Scan;
- public uint Flags,Time;
- public nuint ExtraInfo;
+internal struct CaretRect {
+ public int Left,Top,Right,Bottom;
 }
-[StructLayout(LayoutKind.Explicit,Size=40)]
-internal struct Input {
- [FieldOffset(0)] public uint Type;
- [FieldOffset(8)] public KeyboardInput Keyboard;
+[StructLayout(LayoutKind.Sequential)]
+internal struct GuiThreadInfo {
+ public uint Size,Flags;
+ public nint Active,Focus,Capture,MenuOwner,MoveSize,Caret;
+ public CaretRect CaretBounds;
 }
 internal static class UnicodeInput {
+ internal const int CharacterDelayMs=30;
  internal static void Validate(string? text) {
   if(text==null || text.Length is <1 or >4096) throw new Exception("text_invalid");
   for(var i=0;i<text.Length;i++) {
@@ -24,8 +23,10 @@ internal static class UnicodeInput {
    } else if(char.IsLowSurrogate(character)) throw new Exception("text_invalid");
   }
  }
- internal static Input[] Pair(char character)=>[
-  new Input {Type=1,Keyboard=new KeyboardInput {Scan=character,Flags=4}},
-  new Input {Type=1,Keyboard=new KeyboardInput {Scan=character,Flags=4|2}}
- ];
+ // UTF16 surrogate pairs stay adjacent, without a pacing delay between halves.
+ internal static IEnumerable<char[]> Characters(string text) {
+  Validate(text);
+  foreach(var rune in text.EnumerateRunes())
+   yield return rune.ToString().ToCharArray();
+ }
 }

@@ -33,7 +33,7 @@ npm run dev
 
 ```powershell
 npm run test:personal                 # 隔离完整流程：模拟桌面、实际本地 HTTP、实际 SQLite
-npm run test:foreground-input         # Windows Unicode 按下/松开与原生结构验证，不操作桌面
+npm run test:foreground-input         # Windows 焦点结构与 Unicode 字符验证，不操作桌面
 npm run verify                        # 类型检查、静态检查、全部单元/集成/回归测试
 npm run build                         # 开发构建
 npm run build:win:dev                  # 隔离的 Windows 可运行版本
@@ -50,7 +50,7 @@ npm run test:wechat -- --target "准确备注名"
 
 实机脚本使用实际应用资料和模型接口，等待该联系人发送新消息；确认一条新回复的回显后会暂停并退出。不能收到新消息或验证失败会报告失败，不会用历史消息代替验收。报告位于 `.local/reports/personal-wechat`，不上传聊天内容和密钥。
 
-中文搜索和回复由窗口辅助程序使用 Windows Unicode 按下/松开事件输入，不依赖剪贴板。每次输入确认微信窗口与前台身份，输入后重新读取草稿全文；文字不一致不会按下发送键。
+中文搜索和回复由窗口辅助程序向已核验的前台微信焦点控件写入 Windows Unicode 字符消息，不依赖剪贴板。每个字符都核对窗口、进程和焦点控件；输入后重新读取草稿全文，文字不一致不会按下发送键。
 
 ## 项目结构和清理
 

@@ -1,28 +1,17 @@
 using System.Runtime.InteropServices;
 
 void Check(bool value,string name) {if(!value) throw new Exception(name);}
-Check(nint.Size==8 && Marshal.SizeOf<Input>()==40,"Windows x64 INPUT layout");
-Check(Marshal.OffsetOf<Input>(nameof(Input.Keyboard)).ToInt32()==8,"union alignment");
-Check(Marshal.OffsetOf<KeyboardInput>(nameof(KeyboardInput.ExtraInfo)).ToInt32()==16,"pointer alignment");
+Check(nint.Size==8 && Marshal.SizeOf<GuiThreadInfo>()==72,"Windows x64 GUITHREADINFO layout");
+Check(Marshal.OffsetOf<GuiThreadInfo>(nameof(GuiThreadInfo.Focus)).ToInt32()==16,"focused editor handle alignment");
+Check(Marshal.OffsetOf<GuiThreadInfo>(nameof(GuiThreadInfo.CaretBounds)).ToInt32()==56,"caret rectangle alignment");
 var text="宋总您好，Q 123！😀";
-UnicodeInput.Validate(text);
-foreach(var character in text) {
- var pair=UnicodeInput.Pair(character);
- foreach(var input in pair) {
-  var memory=Marshal.AllocHGlobal(40);
-  try {
-   Marshal.StructureToPtr(input,memory,false);
-   Check(Marshal.ReadInt32(memory,0)==1,"INPUT_KEYBOARD");
-   Check(Marshal.ReadInt16(memory,8)==0,"Unicode virtual key zero");
-   Check((ushort)Marshal.ReadInt16(memory,10)==character,"UTF16 code unit preserved");
-   Check(Marshal.ReadInt64(memory,24)==0,"extra info zero");
-  } finally {Marshal.FreeHGlobal(memory);}
- }
- Check(pair.Length==2 && pair[0].Keyboard.Flags==4 && pair[1].Keyboard.Flags==6,"Unicode down then up");
-}
+Check(UnicodeInput.Characters(text).SelectMany(batch=>batch).SequenceEqual(text),"Chinese/ASCII/punctuation/emoji UTF16 preserved");
 foreach(var invalid in new[]{"","hello\nworld","\t","\u007f",new string('x',4097),"\ud800","\udc00"}) {
  var rejected=false;
- try {UnicodeInput.Validate(invalid);} catch(Exception e) when(e.Message=="text_invalid") {rejected=true;}
- Check(rejected,"invalid input rejected before keyboard access");
+ try {UnicodeInput.Characters(invalid).ToArray();} catch(Exception e) when(e.Message=="text_invalid") {rejected=true;}
+ Check(rejected,"invalid input rejected before editor access");
 }
-Console.WriteLine("Foreground Unicode ABI, Chinese/ASCII/emoji down-up pairs and invalid-input checks passed; no desktop input sent.");
+var characters=UnicodeInput.Characters("验，😀是").ToArray();
+Check(characters.Length==4,"one batch per complete Unicode character");
+Check(characters[2].SequenceEqual("😀"),"surrogate pair remains adjacent");
+Console.WriteLine("Foreground editor ABI, Chinese/ASCII/fullwidth punctuation/emoji UTF16 and invalid-input checks passed; no desktop input sent.");

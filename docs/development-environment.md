@@ -26,7 +26,7 @@ npm run dev
 
 ```powershell
 npm run test:personal           # 实际驱动 + 合成桌面、本地 HTTP、真实 SQLite
-npm run test:foreground-input   # Windows Unicode 原生布局与按键序列，不操作桌面
+npm run test:foreground-input   # Windows 焦点结构布局与 Unicode 字符序列，不操作桌面
 npm run verify                 # 主进程/界面/服务类型、ESLint、全部日常测试
 npm run build
 npm run test:desktop            # 实际 Electron、IPC、SQLite；隔离资料
