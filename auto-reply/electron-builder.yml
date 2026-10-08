@@ -1,0 +1,62 @@
+appId: com.autoreply.desktop
+productName: AutoReply - 智能回复助手
+directories:
+  buildResources: build
+files:
+  - 'out/**'
+  - 'resources/**'
+  - 'package.json'
+  - 'LICENSE'
+  - 'NOTICE'
+  - '!dist/**'
+  - '!.local/**'
+  - '!server/**'
+  - '!tests/**'
+  - '!evals/**'
+  - '!native/**'
+  - '!{vitest*.config.ts,tsconfig*.json,.node-version}'
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md,README.zh-CN.md}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml,package-lock.json}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!.editorconfig'
+  - '!docs/**'
+  - '!scripts/**'
+  - '!design-qa.md'
+  - '!skills/**'
+  - '!sentpredict/predict.py'
+  - '!sentpredict/models/**'
+asarUnpack:
+  - resources/**
+win:
+  executableName: AutoReply
+  extraResources:
+    - from: .local/native/windows-x64
+      to: native/windows-x64
+      filter: ['**/*']
+    - from: .local/foreground-native/windows-x64
+      to: native/foreground
+      filter: ['ForegroundWindow.exe']
+nsis:
+  artifactName: ${name}-${version}-setup.${ext}
+  shortcutName: ${productName}
+  uninstallDisplayName: ${productName}
+  createDesktopShortcut: always
+mac:
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: false
+dmg:
+  artifactName: ${name}-${version}.${ext}
+linux:
+  target:
+    - AppImage
+    - snap
+    - deb
+  category: Utility
+appImage:
+  artifactName: ${name}-${version}.${ext}
+npmRebuild: false
+beforePack: scripts/native-before-pack.cjs
+afterPack: scripts/native-after-pack.cjs

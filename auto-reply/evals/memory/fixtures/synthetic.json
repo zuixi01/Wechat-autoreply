@@ -1,0 +1,102 @@
+{
+  "version": 2,
+  "datasetId": "synthetic-only-not-business-evidence",
+  "origin": "synthetic",
+  "rubricRef": "synthetic-rubric",
+  "frozen": {
+    "frozenAt": 1000,
+    "sharedConfigurationHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "staticMemoryManifestHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "learnedMemoryManifestHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "modelVersion": "synthetic-model",
+    "knowledgeVersion": "synthetic-knowledge",
+    "policyVersion": "synthetic-policy",
+    "retrievalVersion": "synthetic-retrieval",
+    "backgroundCostUsd": 0,
+    "latencyScope": "knowledge_preview",
+    "noMemoryManifestHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "methods": [
+      {
+        "id": "synthetic-method",
+        "revision": 1,
+        "contentHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "sourceCaseIds": ["learn-1"]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "caseId": "learn-1",
+      "conversationId": "synthetic-learn-conversation",
+      "split": "learn",
+      "label": {
+        "origin": "synthetic",
+        "blinded": false,
+        "labelledAt": 500
+      }
+    },
+    {
+      "caseId": "calibrate-1",
+      "conversationId": "synthetic-calibrate-conversation",
+      "split": "calibrate",
+      "label": {
+        "origin": "synthetic",
+        "blinded": false,
+        "labelledAt": 600
+      }
+    },
+    {
+      "caseId": "evaluate-1",
+      "conversationId": "synthetic-evaluation-conversation",
+      "split": "evaluate",
+      "category": "inquiry",
+      "label": {
+        "origin": "synthetic",
+        "blinded": false,
+        "labelledAt": 3000
+      },
+      "baseline": {
+        "reply": "合成错误回复，仅供工具测试。",
+        "humanReviewed": true,
+        "substantialCorrection": true,
+        "severeError": false,
+        "validAnswer": false,
+        "latencyMs": 100,
+        "inputTokens": 100,
+        "outputTokens": 20,
+        "costUsd": 0.001,
+        "generatedAt": 2000,
+        "configurationHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "memoryManifestHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "learned": {
+        "reply": "合成流程回复，仅供工具测试。",
+        "humanReviewed": true,
+        "substantialCorrection": false,
+        "severeError": false,
+        "validAnswer": true,
+        "latencyMs": 200,
+        "inputTokens": 120,
+        "outputTokens": 20,
+        "costUsd": 0.002,
+        "generatedAt": 2000,
+        "configurationHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "memoryManifestHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "none": {
+        "reply": "合成无记忆回复，仅供工具测试。",
+        "humanReviewed": true,
+        "substantialCorrection": true,
+        "severeError": false,
+        "validAnswer": false,
+        "latencyMs": 100,
+        "inputTokens": 100,
+        "outputTokens": 20,
+        "costUsd": 0.001,
+        "generatedAt": 2000,
+        "configurationHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "memoryManifestHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    }
+  ]
+}

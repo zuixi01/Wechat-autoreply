@@ -1,0 +1,76 @@
+import { AppType } from './rpa/types'
+import { SentimentResult } from './sentiment/types'
+import { MemoryCardBrief, TraceStepInput } from './trace/trace-types'
+import type { ConversationBinding } from '../shared/contracts/identity'
+import type { MemorySnapshot } from '../shared/contracts/learning-memory'
+
+export interface ProviderInput {
+  binding?: ConversationBinding
+  learningGenerationId?: string
+  /** Optional stable problem/thread ID supplied by a trusted host, never extracted from names. */
+  learningProblemId?: string
+  memorySnapshot?: MemorySnapshot
+  screenshot: string
+  appType: AppType
+  currentContact?: string
+  ocrText?: string
+  memoryCards?: MemoryCardBrief[]
+  sentimentResult?: SentimentResult
+  extractedText?: string
+  customPrompt?: string
+  userInput?: string
+  objectRelation?: string
+  objectTitle?: string
+}
+
+export type ProviderEvent =
+  | { type: 'thinking'; content: string }
+  | { type: 'reply_text'; content: string; memorySnapshot?: MemorySnapshot; learningGenerationId?: string }
+  | { type: 'skip' }
+  | { type: 'error'; error: string }
+
+export type SessionEvent =
+  | { type: 'bootstrap' }
+  | { type: 'observe_chat' }
+  | { type: 'provider.thinking'; content: string }
+  | { type: 'provider.reply_text'; content: string; memorySnapshot?: MemorySnapshot; learningGenerationId?: string }
+  | { type: 'provider.skip' }
+  | { type: 'provider.error'; error: string }
+  | { type: 'check_unread' }
+  | { type: 'wait_retry'; reason?: string; delayMs?: number }
+
+export interface ProviderAdapter {
+  run(input: ProviderInput): AsyncIterable<ProviderEvent>
+}
+
+export interface RuntimeHostControls {
+  isLearningReplyCurrent?(snapshot: MemorySnapshot): boolean
+  enqueue(event: SessionEvent): void
+  schedule(event: SessionEvent, delayMs: number): void
+  runProvider(input: ProviderInput): AsyncIterable<ProviderEvent>
+  log(type: 'thinking' | 'reply' | 'skip' | 'error', content: string): void
+  trace(step: TraceStepInput): void
+  isRunning(): boolean
+  stopSession(reason?: string): Promise<void>
+  extractChatText?(screenshot: string): Promise<string>
+  classifySentiment?(text: string): Promise<SentimentResult>
+  getAutoReply(): boolean
+  recommendReply(text: string): void
+  identifyContact(screenshot: string): Promise<string>
+  resolveMode(contactName: string): { modeId: string; modeName: string; prompt: string; autoReply: boolean; sentimentEnabled: boolean; unifiedPrefix: string; objectRelation: string; objectTitle: string } | null
+  setAutoReply(autoReply: boolean): void
+  notifyStandby?(standby: boolean): void
+  exitStandby?(): void
+}
+
+export interface ChannelContext<TState> {
+  appType: AppType
+  state: TState
+  host: RuntimeHostControls
+}
+
+export interface ChannelSession<TState> {
+  onStart(ctx: ChannelContext<TState>): Promise<void>
+  onStop(ctx: ChannelContext<TState>): Promise<void>
+  onEvent(event: SessionEvent, ctx: ChannelContext<TState>): Promise<void>
+}

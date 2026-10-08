@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "datasetId": "synthetic-replay-only-not-business-evidence",
+  "origin": "synthetic",
+  "rubricRef": "synthetic-rubric",
+  "model": {
+    "baseURL": "http://127.0.0.1:9999/v1",
+    "model": "synthetic-model",
+    "expectedModel": "synthetic-model",
+    "maxOutputTokens": 100
+  },
+  "maxRequests": 12,
+  "backgroundCostUsd": 0,
+  "knowledge": {
+    "schema": "autoreply-knowledge-v1",
+    "version": "synthetic-knowledge-v1",
+    "settings": { "enabled": true, "fallbackReply": "请转人工核实" },
+    "documents": [
+      {
+        "id": "ecf1a7d2-5272-4488-829b-1aa8bf16e316",
+        "name": "合成设备资料",
+        "category": "产品",
+        "content": "设备报价需要查询有效资料，不得猜测价格。投诉、转人工和多项设备诉求应转交员工核实。",
+        "version": 1
+      }
+    ]
+  },
+  "rules": "简短回复，未核实的信息转人工。",
+  "legacy": [{ "scenario": "设备询价", "guidance": "询问型号", "rationale": "合成静态方法" }],
+  "methods": [
+    {
+      "id": "synthetic-method-1",
+      "revision": 1,
+      "content": {
+        "kind": "lesson",
+        "scenario": "设备询价",
+        "guidance": "先确认型号和数量",
+        "rationale": "合成员工纠正",
+        "steps": [],
+        "pitfalls": [],
+        "verification": []
+      },
+      "sourceCaseIds": ["learn-1"]
+    }
+  ],
+  "sources": [
+    {
+      "caseId": "learn-1",
+      "conversationId": "synthetic-learn",
+      "split": "learn",
+      "label": { "origin": "synthetic", "blinded": false, "labelledAt": 1 }
+    },
+    {
+      "caseId": "calibrate-1",
+      "conversationId": "synthetic-calibrate",
+      "split": "calibrate",
+      "label": { "origin": "synthetic", "blinded": false, "labelledAt": 1 }
+    }
+  ],
+  "cases": [
+    {
+      "caseId": "holdout-1",
+      "conversationId": "synthetic-holdout-1",
+      "category": "inquiry",
+      "question": "设备报价",
+      "memoryIds": ["synthetic-method-1"]
+    },
+    {
+      "caseId": "holdout-2",
+      "conversationId": "synthetic-holdout-2",
+      "category": "complaint",
+      "question": "设备投诉",
+      "memoryIds": []
+    },
+    {
+      "caseId": "holdout-3",
+      "conversationId": "synthetic-holdout-3",
+      "category": "handoff",
+      "question": "设备转人工",
+      "memoryIds": []
+    },
+    {
+      "caseId": "holdout-4",
+      "conversationId": "synthetic-holdout-4",
+      "category": "multiple_intents",
+      "question": "设备报价以及投诉",
+      "memoryIds": ["synthetic-method-1"]
+    }
+  ]
+}

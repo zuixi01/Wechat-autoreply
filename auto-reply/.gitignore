@@ -1,0 +1,91 @@
+node_modules
+dist
+out
+.DS_Store
+.eslintcache
+*.log*
+
+# Local documents and config
+.local/
+
+# Environment variables
+.env
+.env.*
+
+!.env.example
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Trained model weights (too large for Git)
+sentpredict/models/*.pt
+sentpredict/models/*.pth
+sentpredict/models/*.onnx
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Training outputs
+sentpredict/loss_curve.png
+sentpredict/ROC_curve.png
+
+# Embedded Python (downloaded via setup script)
+resources/python/
+
+# IDE config
+.trae/
+.codegraph/
+
+# Internal docs (not for public release)
+docs/*
+!docs/images/
+!docs/provider.en.md
+!docs/provider.md
+!docs/development-plan.zh-CN.md
+!docs/implementation-status.zh-CN.md
+!docs/development-environment.md
+!docs/ledger-recovery.zh-CN.md
+!docs/legacy-migration.zh-CN.md
+!docs/workbench-feedback.zh-CN.md
+!docs/legacy-review.zh-CN.md
+!docs/native-probe.zh-CN.md
+!docs/windows-installer.zh-CN.md
+!docs/capability-report.wechat.md
+!docs/capability-report.wework.md
+!docs/platform-probe-command.zh-CN.md
+!docs/admin-console.zh-CN.md
+!docs/bulk-pause.zh-CN.md
+!docs/account-pause.zh-CN.md
+!docs/runtime-monitoring.zh-CN.md
+!docs/device-credentials.zh-CN.md
+!docs/mainline-development.zh-CN.md
+!docs/wechat-route-research.zh-CN.md
+!docs/wework-route-research.zh-CN.md
+
+# Generated verification output and private evaluation data
+coverage/
+test-results/
+design-qa.md
+evals/private/
+native/**/bin/
+native/**/obj/
+tests/native/**/bin/
+tests/native/**/obj/
+
+# Local test scripts
+src/core/rpa/tests/
+scripts/test-cli.js
+scripts/test-cli.ts
+
+# Source file variants (only keep runtime-needed assets)
+resources/logo_black.png
+resources/logo_white.png
+resources/icon_right-angle.png

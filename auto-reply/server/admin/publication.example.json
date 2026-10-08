@@ -1,0 +1,31 @@
+{
+  "configuration": {
+    "configVersion": "initial-shadow-1",
+    "knowledgeVersion": "knowledge-1",
+    "decisionPolicyVersion": "policy-1",
+    "questionSetVersion": "questions-1",
+    "modelResolved": "REPLACE_WITH_VERIFIED_JEV_MODEL",
+    "automaticEnabled": false
+  },
+  "policy": {
+    "version": "policy-1",
+    "knowledgeVersion": "knowledge-1",
+    "questionSetVersion": "questions-1",
+    "modelAlias": "REPLACE_WITH_VERIFIED_JEV_REQUEST_MODEL",
+    "modelResolved": "REPLACE_WITH_VERIFIED_JEV_MODEL",
+    "mode": "shadow",
+    "evaluationApproved": false,
+    "automaticIntents": ["faq"],
+    "minimumChoiceProbability": 0.9,
+    "minimumChoiceConfidence": 0.8,
+    "minimumChoiceMargin": 0.3,
+    "presentIntentProbability": 0.9,
+    "humanRequestThreshold": 0.2,
+    "minimumAuditProbability": 0.95,
+    "reviewValidityMs": 5000,
+    "preBudgetMs": 3000,
+    "postBudgetMs": 3000
+  },
+  "evidence": [],
+  "textGeneratorVersion": "REPLACE_WITH_GENERATOR_VERSION_OUTPUT"
+}

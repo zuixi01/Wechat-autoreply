@@ -1,0 +1,230 @@
+import {
+  ChannelContext,
+  ChannelSession,
+  ProviderAdapter,
+  ProviderEvent,
+  ProviderInput,
+  RuntimeHostControls,
+  SessionEvent
+} from './session-types'
+import { AppType } from './rpa/types'
+import { SentimentResult } from './sentiment/types'
+import { MemoryCardBrief, TraceStepInput } from './trace/trace-types'
+import type { MemorySnapshot } from '../shared/contracts/learning-memory'
+
+function runtimeErrorMessage(error: unknown): string {
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string')
+    return error.message || String(error)
+  return String(error)
+}
+
+interface RuntimeHostOptions<TState> {
+  isLearningReplyCurrent?: (snapshot: MemorySnapshot) => boolean
+  appType: AppType
+  channel: ChannelSession<TState>
+  provider: ProviderAdapter
+  initialState: TState
+  onLog?: (type: 'thinking' | 'reply' | 'skip' | 'error', content: string) => void
+  onTrace?: (step: TraceStepInput) => void
+  getMemoryCards?: () => MemoryCardBrief[]
+  onSessionEnd?: () => void
+  extractChatText?: (screenshot: string) => Promise<string>
+  classifySentiment?: (text: string) => Promise<SentimentResult>
+  getAutoReply?: () => boolean
+  onRecommendReply?: (text: string) => void
+  identifyContact?: (screenshot: string) => Promise<string>
+  resolveMode?: (contactName: string) => { modeId: string; modeName: string; prompt: string; autoReply: boolean; sentimentEnabled: boolean; unifiedPrefix: string; objectRelation: string; objectTitle: string } | null
+  onSetAutoReply?: (autoReply: boolean) => void
+  onStandbyChange?: (standby: boolean) => void
+}
+
+export class RuntimeHost<TState> {
+  private running = false
+  private stopping = false
+  private processingQueue = false
+  private readonly queue: SessionEvent[] = []
+  private readonly timers = new Set<NodeJS.Timeout>()
+  private readonly context: ChannelContext<TState>
+  /** 最近一轮 provider 调用注入的卡片，用于给 think/act 轨迹自动补 memoryRefs */
+  private lastInjectedCardIds: string[] = []
+
+  constructor(private readonly options: RuntimeHostOptions<TState>) {
+    this.context = {
+      appType: options.appType,
+      state: options.initialState,
+      host: this.createControls()
+    }
+  }
+
+  async startSession(): Promise<void> {
+    if (this.running) return
+
+    this.running = true
+    this.stopping = false
+    this.log('reply', '引擎已启动')
+
+    try {
+      await this.options.channel.onStart(this.context)
+    } catch (error: unknown) {
+      this.log('error', runtimeErrorMessage(error))
+      await this.stopSession('start_failed')
+      throw error
+    }
+  }
+
+  async stopSession(reason?: string): Promise<void> {
+    // The public host protocol accepts a reason; channel shutdown consumes only the context.
+    void reason
+    if (!this.running || this.stopping) return
+
+    this.stopping = true
+    this.running = false
+
+    for (const timer of this.timers) {
+      clearTimeout(timer)
+    }
+    this.timers.clear()
+    this.queue.length = 0
+
+    try {
+      await this.options.channel.onStop(this.context)
+    } finally {
+      this.processingQueue = false
+      this.stopping = false
+      this.log('skip', '引擎已停止')
+      this.options.onSessionEnd?.()
+    }
+  }
+
+  isRunning(): boolean {
+    return this.running
+  }
+
+  updateAppType(appType: AppType): void {
+    this.context.appType = appType
+  }
+
+  updateAutoReply(autoReply: boolean): void {
+    if (this.running && this.context) {
+      const state: unknown = this.context.state
+      if (state && typeof state === 'object' && 'currentModeAutoReply' in state) {
+        state.currentModeAutoReply = autoReply
+      }
+    }
+  }
+
+  private createControls(): RuntimeHostControls {
+    return {
+      enqueue: (event) => this.enqueue(event),
+      schedule: (event, delayMs) => this.schedule(event, delayMs),
+      runProvider: (input: ProviderInput) => this.runProviderWithMemory(input),
+      isLearningReplyCurrent: this.options.isLearningReplyCurrent,
+      log: (type, content) => this.log(type, content),
+      trace: (step) => this.trace(step),
+      isRunning: () => this.running,
+      stopSession: async (reason?: string) => this.stopSession(reason),
+      extractChatText: this.options.extractChatText,
+      classifySentiment: this.options.classifySentiment,
+      getAutoReply: () => this.options.getAutoReply?.() ?? true,
+      recommendReply: (text: string) => this.options.onRecommendReply?.(text),
+      identifyContact: (screenshot: string) => this.options.identifyContact?.(screenshot) ?? Promise.resolve(''),
+      resolveMode: (contactName: string) => this.options.resolveMode?.(contactName) ?? null,
+      setAutoReply: (autoReply: boolean) => this.options.onSetAutoReply?.(autoReply),
+      notifyStandby: (standby: boolean) => this.options.onStandbyChange?.(standby),
+      exitStandby: () => this.forceExitStandby()
+    }
+  }
+
+  forceExitStandby(): void {
+    if (!this.running || !this.context) return
+    const state: unknown = this.context.state
+    if (state && typeof state === 'object' && 'standby' in state && state.standby) {
+      Object.assign(state, {
+        standby: false,
+        standbySince: null,
+        standbyRetryCount: 0,
+        consecutiveNoChangeRounds: 0
+      })
+      this.log('thinking', '用户操作，退出待机状态')
+      this.options.onStandbyChange?.(false)
+      this.enqueue({ type: 'observe_chat' })
+    }
+  }
+
+  /** provider 调用前注入工作记忆（经验卡片），并记下卡片 id 供轨迹引用标记 */
+  private runProviderWithMemory(input: ProviderInput): AsyncIterable<ProviderEvent> {
+    const cards = this.options.getMemoryCards?.() ?? []
+    this.lastInjectedCardIds = cards.map((card) => card.cardId)
+    return this.options.provider.run(cards.length ? { ...input, memoryCards: cards } : input)
+  }
+
+  private trace(step: TraceStepInput): void {
+    if (!this.options.onTrace) return
+
+    // 模型判断 / 动作类步骤自动标记本轮引用的经验卡片
+    const needsRefs =
+      (step.phase === 'think' || step.phase === 'act') &&
+      this.lastInjectedCardIds.length > 0 &&
+      !step.reasoning?.memoryRefs
+    const enriched = needsRefs
+      ? {
+          ...step,
+          reasoning: {
+            content: step.reasoning?.content ?? step.summary,
+            memoryRefs: [...this.lastInjectedCardIds]
+          }
+        }
+      : step
+
+    try {
+      this.options.onTrace(enriched)
+    } catch (error) {
+      console.error('[RuntimeHost] onTrace 回调失败:', error)
+    }
+  }
+
+  private enqueue(event: SessionEvent): void {
+    if (!this.running) return
+
+    this.queue.push(event)
+    void this.drainQueue()
+  }
+
+  private schedule(event: SessionEvent, delayMs: number): void {
+    if (!this.running) return
+
+    const timer = setTimeout(() => {
+      this.timers.delete(timer)
+      this.enqueue(event)
+    }, delayMs)
+
+    this.timers.add(timer)
+  }
+
+  private async drainQueue(): Promise<void> {
+    if (this.processingQueue || !this.running) return
+
+    this.processingQueue = true
+    try {
+      while (this.queue.length > 0 && this.running) {
+        const event = this.queue.shift()
+        if (!event) continue
+
+        await this.options.channel.onEvent(event, this.context)
+      }
+    } catch (error: unknown) {
+      this.log('error', runtimeErrorMessage(error))
+      await this.stopSession('runtime_error')
+    } finally {
+      this.processingQueue = false
+    }
+  }
+
+  private log(type: 'thinking' | 'reply' | 'skip' | 'error', content: string): void {
+    if (this.options.onLog) {
+      this.options.onLog(type, content)
+    } else {
+      console.log(`[RuntimeHost] [${type}] ${content}`)
+    }
+  }
+}

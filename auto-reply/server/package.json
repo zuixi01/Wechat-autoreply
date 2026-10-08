@@ -1,0 +1,33 @@
+{
+  "name": "autoreply-management-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.21.0 <25"
+  },
+  "scripts": {
+    "build": "node build-release.mjs",
+    "start": "node server/src/index.js",
+    "check": "node server/scripts/server-check.js",
+    "admin:serve": "node server/scripts/admin-server.js",
+    "eval:jev": "node server/scripts/jev-replay.js",
+    "jev:settlements": "node server/scripts/jev-settlements.js",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "admin": "node server/scripts/admin.js",
+    "admin:dev": "tsx scripts/admin.ts",
+    "jev:check": "node server/scripts/jev-check.js"
+  },
+  "dependencies": {
+    "zod": "4.6.5",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.17",
+    "typescript": "5.9.3",
+    "tsx": "4.23.15",
+    "@types/pg": "8.23.1",
+    "esbuild": "0.25.12"
+  }
+}

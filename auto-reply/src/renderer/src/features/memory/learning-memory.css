@@ -1,0 +1,115 @@
+.learning-panel {
+  padding: 24px;
+  color: var(--text-primary);
+  max-width: 1200px;
+  margin: auto;
+}
+.learning-panel h2,
+.learning-panel h4 {
+  margin: 0 0 12px;
+}
+.learning-panel p,
+.learning-panel pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+.learning-controls,
+.learning-tabs,
+.learning-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0;
+}
+.learning-controls label {
+  display: grid;
+  gap: 6px;
+}
+.learning-controls select {
+  min-width: 170px;
+}
+.learning-card,
+.learning-usage,
+.learning-manual {
+  border: 1px solid var(--border-color, #53627a);
+  border-radius: 10px;
+  background: var(--bg-glass);
+  padding: 18px;
+  margin: 14px 0;
+}
+.learning-card header {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+.learning-card header span,
+.learning-empty {
+  color: var(--text-secondary);
+}
+.learning-diff {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.learning-diff article,
+.learning-version {
+  padding: 12px;
+  border: 1px solid var(--border-color, #53627a);
+  border-radius: 8px;
+}
+.learning-source {
+  overflow-wrap: anywhere;
+  margin: 8px 0;
+}
+.learning-method-edit .form-label,
+.learning-manual .form-label {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+}
+.learning-version {
+  margin: 10px 0;
+}
+.learning-error {
+  color: #e98d8d;
+}
+.learning-panel summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 8px 0;
+}
+.learning-panel textarea,
+.learning-panel input.form-input {
+  width: 100%;
+}
+.learning-panel textarea {
+  min-height: 80px;
+}
+.learning-correction .form-label {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+}
+.learning-feedback .form-label {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+}
+.learning-panel .learning-controls input.form-input {
+  min-width: 0;
+}
+.learning-panel #learning-calibration-json {
+  min-height: 240px;
+  font-family: monospace;
+}
+@media (max-width: 760px) {
+  .learning-panel {
+    padding: 16px;
+  }
+  .learning-diff {
+    grid-template-columns: 1fr;
+  }
+}

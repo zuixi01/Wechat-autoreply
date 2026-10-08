@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "lib": ["ES2023", "DOM"]
+  },
+  "include": ["src/shared/**/*.ts", "server/**/*.ts", "tests/**/*.ts", "scripts/platform-probe.ts", "scripts/platform-probe-compare.ts", "scripts/release-source-snapshot.ts", "scripts/publish-native.ts", "scripts/ledger-recovery.ts", "scripts/joint-recovery.ts", "scripts/central-recovery.ts", "scripts/joint-backup-postgres-fixture.ts", "scripts/legacy-settings-migrate.ts", "scripts/legacy-settings-review.ts", "scripts/memory-evaluate.ts", "scripts/memory-replay.ts", "scripts/learning-publication-desktop-fixture.ts", "scripts/learning-iteration-desktop-fixture.ts", "scripts/workbench-presentation-desktop-fixture.ts", "scripts/foreground-evaluation-desktop-fixture.ts", "scripts/server-employee-connection-fixture.ts", "scripts/server-windows-device-fixture.ts", "vitest.config.ts", "vitest.scenarios.config.ts", "vitest.postgres.config.ts"]
+}
