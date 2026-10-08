@@ -1,281 +1,39 @@
-<a name="readme-top"></a>
+# WeChat AutoReply
 
-<div align="center">
+A Windows personal WeChat client with a separate enterprise reply service, based on SightFlow. Attribution and licensing are in NOTICE and LICENSE. See the [Chinese guide](README.md) for the complete workflow.
 
-<h1>AutoReply · Smart Reply Assistant</h1>
+The default personal workflow reads visible messages, generates a reply with your configured model and rules, verifies the contact/window/draft, writes a durable journal, sends, and verifies the outbound echo. WeChat must remain in the foreground. Losing focus waits; returning revalidates before continuing.
 
-<p><strong>AI-powered desktop intelligent auto-reply system — see the screen, identify contacts, reply intelligently, accumulate experience.</strong></p>
+## Run
 
-<p>
-  <a href="./README.md"><b>简体中文</b></a>
-  &nbsp;·&nbsp;
-  <a href="./README.en.md">English</a>
-</p>
+Windows x64, Node.js 24.21 or compatible Node 24, and .NET 10 SDK are required for development. The existing workspace can use `.local/toolchain`; a fresh checkout can use system tools. Native input installation may require Windows C++ build tools.
 
-<p>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0" /></a>
-  <img src="https://img.shields.io/badge/Platform-Windows-success" alt="Platform: Windows" />
-  <img src="https://img.shields.io/badge/Electron-39-blue" alt="Electron 39" />
-</p>
-
-<p>
-  <a href="#-overview"><b>Overview</b></a> ·
-  <a href="#-key-features"><b>Features</b></a> ·
-  <a href="#-advantages-over-original-project"><b>Advantages</b></a> ·
-  <a href="#-quick-start"><b>Quick Start</b></a> ·
-  <a href="#-configuration"><b>Configuration</b></a> ·
-  <a href="#-architecture"><b>Architecture</b></a>
-</p>
-
-</div>
-
----
-
-## 📌 Overview
-
-**AutoReply (Smart Reply Assistant)** is a VLM-powered desktop intelligent auto-reply system focused on instant messaging scenarios. The system automatically monitors chat windows, understands conversation content, generates personalized replies, and accumulates reusable dialogue experience from every interaction.
-
-Built on the [SightFlow](https://github.com/sightflow-dev/sightflow-desktop-agent) open-source project with deep secondary development, it retains the original vision-driven automation capabilities while adding **multi-mode management, specific contact routing, semi-auto reply, working memory engine, and sentiment analysis** — upgrading the project from a general-purpose RPA tool to a conversation-focused intelligent reply platform.
-
----
-
-## ✦ Key Features
-
-### 🎯 Intelligent Conversation Reply
-
-| Capability | Description |
-| :-- | :-- |
-| **Vision-Driven** | VLM automatically identifies chat window layout and extracts message content — no API integration needed |
-| **Semi-Auto Reply** | AI recommends reply → user one-click paste/reply/skip — human-AI collaboration for safety |
-| **Full Automation** | Three-level auto-reply switches (global / mode / contact) — unattended operation supported |
-| **Sentiment Analysis** | Optional BERT sentiment classification to detect conversation emotional tendencies and assist in generating context-aware replies |
-
-### 🧠 Multi-Mode Management
-
-| Capability | Description |
-| :-- | :-- |
-| **Preset Modes** | Built-in system modes, can be disabled but not deleted |
-| **Custom Modes** | Create modes freely with custom Prompt, sentiment analysis toggle, unified prefix |
-| **Independent Runtime** | Each mode has its own running state, log stream, and recommended reply |
-| **Parallel Execution** | Multiple modes can run simultaneously, each maintaining its own conversation detection loop |
-
-### 👤 Specific Contact Routing
-
-| Capability | Description |
-| :-- | :-- |
-| **Contact Identification** | VLM automatically extracts contact name from chat window title bar |
-| **Smart Routing** | Matched contact → route to dedicated mode; unmatched → use global default mode |
-| **Personalized Config** | Each contact can have specific title, relationship description, and independent auto-reply strategy |
-| **Prompt Injection** | Contact's title and relationship are automatically injected into the Prompt for context-aware replies |
-
-### 📚 Working Memory Engine
-
-AutoReply's most differentiated capability — letting AI **learn and accumulate experience** from every conversation:
-
-| Layer | Capability | Description |
-| :-- | :-- | :-- |
-| **L1 Record** | Structured Traces | Each step records: timestamp / UI state / rationale / action / result |
-| **L2 Replay** | Trace Playback | Timeline card flow + step-by-step replay + screenshot highlighting for decision review |
-| **L3 Inherit** | Experience Accumulation | Traces auto-inducted into experience cards, injected into Prompt at runtime, with quantifiable effectiveness stats |
-
-> Others record **operation steps**; we record **"why this decision was made"**. The key difference from RPA to Agent Runtime.
-
-### 🖥️ Multi-Provider Model Support
-
-| Provider | Default Model | Capabilities |
-| :-- | :-- | :-- |
-| Volcengine Ark | doubao-seed-2-0-lite-260215 | Text + Vision |
-| DashScope (Alibaba Cloud) | qwen-vl-plus | Text + Vision |
-| OpenAI | gpt-4o | Text + Vision |
-| DeepSeek | deepseek-chat | Text |
-| Custom | - | Text |
-
-- **Vision model** and **reply model** configured separately for flexible combination
-- Model capability tags (text/vision/audio) with connection testing
-- Non-vision reply models automatically enable text extraction mode
-- Click anywhere on model card to open editor, one-click connection test button
-
-### 📱 Multi-Platform IM Support
-
-| Application | Detection Method |
-| :-- | :-- |
-| WeChat / WeCom | VLM automatic window layout detection |
-| DingTalk / Lark / Slack / Telegram | Manual region selection |
-| Other desktop apps | Manual region selection |
-
----
-
-## ✦ Advantages Over Original Project
-
-| Dimension | SightFlow (Original) | AutoReply (This Project) |
-| :-- | :-- | :-- |
-| **Positioning** | General desktop RPA tool | Conversation-focused intelligent reply platform |
-| **Reply Modes** | Single global mode | ✅ Multi-mode management + custom Prompt + independent runtime |
-| **Contact Recognition** | None | ✅ VLM contact identification + specific contact routing + personalized config |
-| **Reply Method** | Full-auto only | ✅ Semi-auto (recommend/paste/reply/skip) + full-auto, three-level auto-reply priority |
-| **Experience Accumulation** | Work trace recording | ✅ Trace recording + playback + experience accumulation + runtime injection + quantifiable effectiveness |
-| **Model Configuration** | Fixed Volcengine Ark | ✅ Multi-provider support + vision/reply model separation + capability tags |
-| **Standby Management** | None | ✅ Progressive backoff standby + semantic confirmation exit + status visualization |
-| **Sentiment Analysis** | None | ✅ Optional BERT sentiment classification + emotion-aware reply strategy |
-| **Model Training** | None | ✅ Built-in training UI + Kaggle dataset + real-time progress streaming |
-| **Human Correction** | None | ✅ Trace step correction → accumulated as experience cards |
-
----
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- **Node.js** (LTS version)
-- **Python 3.8+** (required for sentiment analysis module)
-- **npm**
-
-### 1. Install Dependencies
-
-```bash
-git clone https://github.com/DreDabe/auto-reply.git
-cd auto-reply
-
-npm install
-```
-
-### 2. Python Dependencies
-
-On first run, the program will **automatically detect and install** Python dependencies (`torch`, `transformers`, `pandas`, `scikit-learn`, `kagglehub`, `tqdm`, `numpy`).
-
-For manual installation:
-
-```bash
-pip install -r sentpredict/requirements.txt
-```
-
-> For users in China, HuggingFace mirror is recommended: the program has built-in `HF_ENDPOINT=https://hf-mirror.com`.
-
-### 3. Run in Development Mode
-
-```bash
+```powershell
+npm ci
 npm run dev
 ```
 
-### 4. Build for Production
+Configure an HTTPS Chat Completions endpoint and key, test the connection, select a vision-capable model and a reply model, then save reply rules. Enter an exact contact name and start. If search cannot identify a unique contact, manually open that private chat, clear its draft and use the current-chat connection button.
 
-```bash
-npm run build:win     # Windows
-npm run build:mac     # macOS
-npm run build:linux   # Linux
+The first start establishes a baseline without replying to history. Pause/restart preserves progress. A changed window or policy requires explicitly reconnecting from current messages. Human drafts, manual replies and discontinuous history pause the process. Unknown send outcomes require manual verification in WeChat; reconciliation never automatically replays the message.
+
+Batch processing is optional and limited to an explicit contact list. Enterprise services and working memory initialize when first opened. Enterprise background messaging still requires a verified platform adapter; the window probe alone cannot provide that capability.
+
+## Validate and build
+
+```powershell
+npm run test:personal
+npm run test:foreground-input
+npm run verify
+npm run build
+npm run build:win:dev
+npm run test:desktop:release
 ```
 
----
+With an explicitly authorized contact, `npm run test:wechat -- --target "Exact name"` runs the real application and provider. It waits for a new inbound message, confirms one new outbound reply, then pauses and exits. It reports failure when no new message arrives or validation fails. Add `--current-chat` only after selecting the intended chat manually.
 
-## ⚙️ Configuration
+The pinned Windows helper types Chinese and other Unicode text using paired key-down/key-up events, without the clipboard. The application rereads the complete draft before pressing Enter. Initial connection allows a short wait for WeChat to return to the foreground.
 
-### Basic Setup
+Successful Windows builds retain two successful releases and recent diagnostics. `npm run clean:artifacts` previews cleanup; add `-- --apply` to execute it. Only allowlisted generated caches are eligible. Source, dependencies, toolchains, user profiles, databases and personal acceptance reports are preserved. Directory junctions are never followed.
 
-1. Go to [Volcengine Console → Ark](https://console.volcengine.com/ark), enable the service and generate an API Key
-2. Launch the app and click the settings button at the bottom of the sidebar
-3. In **Basic Configuration**, select global vision model and global reply model
-4. In **Agent**, select the active Provider — built-in default is **Doubao Seed**
-
-### Model Configuration
-
-Manage AI models from different providers in the **Model Configuration** section of settings:
-
-- Click **+ Add Model** to select a provider and enter API Key
-- Connection testing supported to verify configuration
-- Model capabilities auto-tagged — vision models for layout detection, text models for reply generation
-
-### Sentiment Analysis
-
-Enable sentiment analysis in mode settings:
-
-1. In **Model Training**, click **Start Training** — automatically downloads dataset and starts training
-2. Training logs display in real-time in the log view below
-3. After training, the model is automatically saved as `sentpredict/models/best.pt`
-4. Enable the sentiment analysis toggle in mode details to use
-
-> ⚠️ Training takes a long time (hours). First-time training requires downloading BERT pre-trained weights and dataset.
-
-### Target App & Region Selection
-
-- **WeChat / WeCom**: VLM automatic window region detection by default
-- **DingTalk, Lark, Slack, Telegram, etc.**: Manual selection of three regions (contact list, chat content area, input box)
-
----
-
-## 🏗️ Architecture
-
-```
-src/
-├── main/
-│   ├── index.ts              # Main process: window management, IPC, engine orchestration
-│   ├── overlay-window.ts     # Box-select wizard window
-│   ├── provider-bundle.ts    # Provider installation and loading
-│   └── skill-server.ts       # Local HTTP API
-├── core/
-│   ├── ai-client.ts          # Unified AI call wrapper
-│   ├── device.ts             # Device interface
-│   ├── rpa-device.ts         # VLM layout detection + RPA operations
-│   ├── box-select-device.ts  # Manual box-select mode
-│   ├── runtime-host.ts       # Event queue + trace + memory
-│   ├── generic-channel-session.ts  # State machine + mode routing
-│   ├── sentiment/
-│   │   └── classifier.ts     # BERT sentiment classifier (Python subprocess)
-│   ├── memory/
-│   │   ├── experience-store.ts  # Experience card storage
-│   │   └── learn-from-session.ts  # Trace → experience induction
-│   ├── trace/
-│   │   └── trace-recorder.ts # Structured work traces
-│   ├── rpa/
-│   │   ├── vision-utils.ts   # VLM vision detection
-│   │   ├── image-compare.ts  # Pixel diff detection
-│   │   ├── has-unread.ts     # Unread badge detection
-│   │   ├── input-utils.ts    # RPA input operations
-│   │   └── screenshot-utils.ts  # Screenshot utilities
-│   └── types.ts              # Global type definitions
-├── preload/
-│   └── index.ts              # Preload script (IPC Bridge)
-└── renderer/
-    └── src/
-        ├── App.tsx           # Main UI + Settings + Mode management
-        ├── MemoryWindow.tsx  # Working memory window
-        ├── i18n.ts           # Internationalization
-        └── index.css         # Global styles
-```
-
----
-
-## 🔐 Security & Data
-
-- Work traces and experience cards are **stored locally by default** — never uploaded to any server
-- Sentiment analysis runs in a local Python subprocess — text data never leaves your machine
-- API Keys stored locally via electron-store with encryption
-- Skill HTTP Server only listens on `127.0.0.1:12680`
-- **Your work data always belongs to you**
-
----
-
-## 💬 Questions & Contact
-
-For questions, suggestions, or feedback, feel free to reach out:
-
-- 📧 Email: [dreadabe@gmail.com](mailto:dreadabe@gmail.com)
-
----
-
-## 🤝 Acknowledgements
-
-This project is built on the following open-source project:
-
-- **[SightFlow](https://github.com/sightflow-dev/sightflow-desktop-agent)** — Open-source desktop AI working memory engine, Apache License 2.0
-
----
-
-## 📄 License
-
-Released under the [Apache License 2.0](LICENSE).
-
----
-
-<div align="center"><sub>© 2026 AutoReply. Based on SightFlow. Released under the Apache License 2.0.</sub></div>
-
-<p align="right"><a href="#readme-top">↑ Back to top</a></p>
+Python sentiment training, unused providers/devices, offline design drafts and broken test commands have been removed. Personal replies do not require Python, PostgreSQL or an enterprise server.

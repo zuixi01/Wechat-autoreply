@@ -22,6 +22,7 @@ export interface ForegroundDriver {
 export interface ForegroundJournal {
   list(limit?: number): ForegroundRecord[]
   hasUnknown?(): boolean
+  unresolved?(): ForegroundRecord[]
   save(record: ForegroundRecord): void
 }
 const active = new Set(['connecting', 'running', 'waiting_foreground', 'generating', 'sending'])
@@ -47,7 +48,12 @@ export class ForegroundWechatRuntime {
       state: this.state,
       target: this.target,
       reason: this.reason,
-      records: this.journal.list(50).slice(-50).reverse()
+      records: [
+        ...(this.journal.unresolved?.() ?? []).slice(0, 50),
+        ...this.journal.list(50).slice(-50).reverse()
+      ]
+        .filter((record, index, all) => all.findIndex((value) => value.id === record.id) === index)
+        .slice(0, 50)
     }
   }
   async start(
@@ -59,6 +65,8 @@ export class ForegroundWechatRuntime {
     if (active.has(this.state) || this.work) return this.status()
     this.target = target.trim()
     if (!this.target) return this.stopWith('target_required')
+    if (restored && restored.baseline.contact !== this.target)
+      return this.stopWith('checkpoint_invalid')
     if (this.journal.hasUnknown?.() ?? this.journal.list().some((r) => r.state === 'unknown'))
       return this.stopWith('send_unknown')
     this.reason = 'none'
@@ -243,14 +251,16 @@ export class ForegroundWechatRuntime {
         this.stopWith('send_unknown')
         return
       }
-      if (signal.aborted) return
       if (outcome === 'not_sent') {
-        this.stopWith('send_cancelled')
+        if (!signal.aborted) this.stopWith('send_cancelled')
         return
       }
       this.ownEcho = record.reply
       this.pendingWork = false
       this.changed()
+      // A pause racing a positive receipt must still persist the echo marker;
+      // otherwise restart mistakes our own reply for an untracked human reply.
+      if (signal.aborted) return
       this.state = 'running'
     } catch (error) {
       if (!signal.aborted) {

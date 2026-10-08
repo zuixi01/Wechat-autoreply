@@ -1,7 +1,10 @@
 import { BrowserWindow, ipcMain } from 'electron'
 import { join } from 'node:path'
 import { rendererTrust } from './trusted-ipc'
-import { ForegroundStartSchema } from '../../shared/contracts/foreground-wechat'
+import {
+  ForegroundStartSchema,
+  ForegroundResolutionSchema
+} from '../../shared/contracts/foreground-wechat'
 import { ForegroundWechatRuntime } from '../../core/agent/foreground-wechat'
 import { ForegroundBatchRuntime } from '../../core/agent/foreground-batch'
 import { ForegroundBatchNavigator } from '../services/foreground-batch-navigator'
@@ -26,7 +29,9 @@ export function registerForegroundWechatIpc(
   const journal = new SqliteForegroundJournal(join(userData, 'agent', 'foreground-wechat.sqlite'))
   const runtime = new ForegroundWechatRuntime(
     new ForegroundWechatDriver(() => configuration(runtime.status().target)),
-    journal
+    journal,
+    true,
+    (value) => journal.saveSingle(value)
   )
   const batch = new ForegroundBatchRuntime(
     new ForegroundBatchNavigator(
@@ -62,7 +67,13 @@ export function registerForegroundWechatIpc(
     try {
       await batch.pause()
       if (epoch !== operation) return runtime.status()
-      const status = await runtime.start(input.target, input.connectionMode)
+      if (input.resetBaseline) journal.clearSingle(input.target)
+      const status = await runtime.start(
+        input.target,
+        input.connectionMode,
+        undefined,
+        journal.loadSingle(input.target)
+      )
       if (status.state === 'paused' && status.reason !== 'user_pause') {
         const window = BrowserWindow.fromWebContents(event.sender)
         if (window && !window.isDestroyed()) {
@@ -79,6 +90,20 @@ export function registerForegroundWechatIpc(
     trusted(event)
     operation++
     return runtime.pause()
+  })
+  ipcMain.handle('foreground-wechat:resolve', async (event, raw: unknown) => {
+    trusted(event)
+    const input = ForegroundResolutionSchema.parse(raw)
+    if (starting) throw new Error('personal_mode_busy')
+    starting = true
+    operation++
+    try {
+      await Promise.all([runtime.pause(), batch.pause()])
+      journal.resolve(input)
+      return runtime.status()
+    } finally {
+      starting = false
+    }
   })
   ipcMain.handle('foreground-wechat:batch-status', (event) => {
     trusted(event)

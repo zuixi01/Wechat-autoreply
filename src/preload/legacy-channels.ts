@@ -1,5 +1,6 @@
 /** Compatibility routes for existing screens. Private device/runtime APIs use named bridges. */
 const invokes = new Set([
+  'features:advanced-enable',
   'settings:getAll',
   'settings:get',
   'settings:set',
@@ -42,9 +43,6 @@ const invokes = new Set([
   'trace:listSessions',
   'trace:getSession',
   'trace:getScreenshot',
-  'train:start',
-  'train:stop',
-  'train:status',
   'capture:openSetupWizard',
   'capture:getRegions',
   'capture:resetRegions'
@@ -58,7 +56,6 @@ const events = new Set([
   'engine:recommendReply',
   'engine:standbyChanged',
   'engine:pendingChanged',
-  'train:event',
   'trace:step',
   'capture:regions-updated',
   'overlay-wizard:init'

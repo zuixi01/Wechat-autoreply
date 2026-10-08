@@ -33,6 +33,10 @@ const windows = {
   },
   focus: async () => {
     f.active = 71
+  },
+  typeText: async (binding: typeof nativeWindow, text: string, signal: AbortSignal) => {
+    if (signal.aborted || String(f.active) !== binding.id) throw new Error('foreground_lost')
+    f.type(text)
   }
 }
 vi.mock('electron', () => ({
@@ -56,7 +60,9 @@ vi.mock('../../src/core/rpa/util', () => ({
   getRobot: () => ({
     moveMouse: f.move,
     mouseClick: f.click,
-    typeString: f.type,
+    typeString: () => {
+      throw new Error('RobotJS Unicode input must not be used')
+    },
     keyTap: f.tap,
     scrollMouse: f.scroll,
     getScreenSize: () => ({ width: 1920, height: 1080 }),
@@ -202,6 +208,21 @@ describe('project foreground sender boundaries', () => {
     await expect(advance(t.driver.read(t.signal))).rejects.toThrow('model_network_failed')
     expect(f.tap).not.toHaveBeenCalled()
   })
+  it('waits without input when Windows declines initial focus, then accepts the manually foregrounded chat', async () => {
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '简洁回复', revision: 'rules-1' }),
+      windows
+    )
+    f.active = 8
+    vi.spyOn(windows, 'focus').mockResolvedValueOnce()
+    setTimeout(() => {
+      f.active = 71
+    }, 1000)
+    await advance(driver.connect('Q', controller().signal, 'current_chat'))
+    expect(f.type).not.toHaveBeenCalled()
+    expect(f.tap).not.toHaveBeenCalled()
+    expect(f.click).not.toHaveBeenCalled()
+  })
   it('uses Unicode typing without clipboard and sends Enter once after draft validation and echo', async () => {
     const t = await connected()
     f.fetch.mockResolvedValueOnce(response(visual('测试回复'))).mockResolvedValueOnce(
@@ -216,6 +237,29 @@ describe('project foreground sender boundaries', () => {
     expect(f.type).toHaveBeenCalledWith('测试回复')
     expect(f.tap.mock.calls).toEqual([['enter']])
   })
+  it('waits for an exact frame after temporary caret animation without masking changed pixels', async () => {
+    const t = await connected(),
+      original = Buffer.from(f.png)
+    const image = await Jimp.read(original)
+    image.setPixelColor(0x000000ff, 400, 470)
+    const caret = await image.getBuffer('image/png')
+    let checks = 0
+    f.inspectEffect = () => {
+      checks++
+      f.png = checks <= 2 ? caret : original
+    }
+    f.fetch.mockResolvedValueOnce(response(visual('测试回复'))).mockResolvedValueOnce(
+      response(
+        visual('', [
+          { direction: 'inbound', text: '问题' },
+          { direction: 'outbound', text: '测试回复' }
+        ])
+      )
+    )
+    expect(await advance(t.driver.dispatch(t.observation, '测试回复', t.signal))).toBe('sent')
+    expect(checks).toBeGreaterThan(2)
+    expect(f.tap.mock.calls).toEqual([['enter']])
+  })
   it('treats a failing send keystroke as unknown and never tries alternate shortcuts', async () => {
     const t = await connected()
     f.fetch.mockResolvedValueOnce(response(visual('测试回复')))
@@ -224,6 +268,14 @@ describe('project foreground sender boundaries', () => {
     })
     expect(await advance(t.driver.dispatch(t.observation, '测试回复', t.signal))).toBe('unknown')
     expect(f.tap).toHaveBeenCalledTimes(1)
+  })
+  it('never presses Enter after native Unicode input fails or loses focus mid-input', async () => {
+    const t = await connected()
+    f.type.mockImplementationOnce(() => {
+      throw new Error('input_failed')
+    })
+    expect(await advance(t.driver.dispatch(t.observation, '测试回复', t.signal))).toBe('not_sent')
+    expect(f.tap).not.toHaveBeenCalled()
   })
   it('does not press Enter if a person changes the draft during validation', async () => {
     const t = await connected()

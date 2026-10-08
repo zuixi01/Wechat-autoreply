@@ -1,40 +1,53 @@
-/* eslint-disable @typescript-eslint/no-require-imports -- Electron project acceptance entry. */
-// Launches the actual project/profile and clicks its own controls. No Codex/Computer Use driver.
+/* eslint-disable @typescript-eslint/no-require-imports -- Real Electron acceptance bootstrap. */
 const { app } = require('electron')
 const { join, resolve } = require('node:path')
 const { mkdirSync, writeFileSync, appendFileSync } = require('node:fs')
 const { randomUUID } = require('node:crypto')
-// GUI launches can outlive the invoking terminal's output pipe.
-for (const stream of [process.stdout, process.stderr]) {
-  stream.on('error', () => {})
-}
-const root = resolve(__dirname, '..'),
-  name = require(join(root, 'package.json')).name
+const root = resolve(__dirname, '..')
+const target = process.env.AUTOREPLY_WECHAT_TEST_TARGET?.trim()
+if (
+  !target ||
+  target.length > 128 ||
+  Array.from(target).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
+)
+  throw new Error('explicit_test_target_required')
+const timeout = Number(process.env.AUTOREPLY_WECHAT_TEST_TIMEOUT || 180000)
+if (!Number.isInteger(timeout) || timeout < 30000 || timeout > 600000)
+  throw new Error('test_timeout_invalid')
 app.setAppPath(root)
+const name = require(join(root, 'package.json')).name
 app.setName(name)
 app.setPath('userData', join(app.getPath('appData'), name))
 delete process.env.ELECTRON_RENDERER_URL
-const directory = join(root, '.local', 'reports', 'personal-wechat', randomUUID())
+if (
+  process.env.AUTOREPLY_WECHAT_TEST_ID &&
+  !/^[a-f0-9-]{36}$/.test(process.env.AUTOREPLY_WECHAT_TEST_ID)
+)
+  throw new Error('test_id_invalid')
+const directory = join(
+  root,
+  '.local',
+  'reports',
+  'personal-wechat',
+  process.env.AUTOREPLY_WECHAT_TEST_ID || randomUUID()
+)
 mkdirSync(directory, { recursive: true })
-const providerFetch = globalThis.fetch
+for (const stream of [process.stdout, process.stderr]) stream.on('error', () => {})
+const originalFetch = globalThis.fetch
 globalThis.fetch = async (input, options) => {
-  let provider = false
-  try {
-    provider = new URL(String(input)).hostname === 'router.keenlight.ai'
-  } catch {
-    /* Non-provider requests are untouched. */
-  }
-  if (!provider) return providerFetch(input, options)
   const started = Date.now()
-  const details = {
-    at: started,
-    bodyBytes: typeof options?.body === 'string' ? Buffer.byteLength(options.body) : 0
-  }
+  let tracked = false
   try {
-    const response = await providerFetch(input, options)
+    tracked = new URL(String(input)).pathname.endsWith('/chat/completions')
+  } catch {
+    /* Other requests are unchanged. */
+  }
+  if (!tracked) return originalFetch(input, options)
+  try {
+    const response = await originalFetch(input, options)
     appendFileSync(
       join(directory, 'provider-requests.jsonl'),
-      JSON.stringify({ ...details, status: response.status, durationMs: Date.now() - started }) +
+      JSON.stringify({ at: started, status: response.status, durationMs: Date.now() - started }) +
         '\n'
     )
     return response
@@ -42,9 +55,9 @@ globalThis.fetch = async (input, options) => {
     appendFileSync(
       join(directory, 'provider-requests.jsonl'),
       JSON.stringify({
-        ...details,
+        at: started,
         error: error.name,
-        cause: typeof error.cause?.code === 'string' ? error.cause.code : undefined,
+        cause: error.cause?.code,
         durationMs: Date.now() - started
       }) + '\n'
     )
@@ -52,105 +65,136 @@ globalThis.fetch = async (input, options) => {
   }
 }
 let attached = false,
-  timer
-const batchTest = process.env.AUTOREPLY_WECHAT_TEST_BATCH === '1'
+  timer,
+  finished = false
+const initialIds = new Set()
+async function finish(window, passed, code, status) {
+  if (finished) return
+  finished = true
+  clearInterval(timer)
+  await window.webContents.executeJavaScript('window.foregroundWechat.pause()').catch(() => {})
+  writeFileSync(
+    join(directory, 'result.json'),
+    JSON.stringify(
+      {
+        passed,
+        code,
+        target,
+        realDesktop: true,
+        realProvider: true,
+        newSent:
+          status?.records.filter(
+            (row) => row.target === target && row.state === 'sent' && !initialIds.has(row.id)
+          ).length || 0,
+        finishedAt: new Date().toISOString()
+      },
+      null,
+      2
+    )
+  )
+  process.stdout.write(
+    'Personal WeChat acceptance: ' + code + '; report=' + join(directory, 'result.json') + '\n'
+  )
+  app.quit()
+}
 app.on('browser-window-created', (_event, window) => {
   window.webContents.once('did-finish-load', async () => {
     if (attached || window.isDestroyed()) return
     try {
-      const isMain = await window.webContents.executeJavaScript(
-        'Boolean(document.querySelector("#personal-wechat-target"))'
+      if (
+        !(await window.webContents.executeJavaScript(
+          'Boolean(document.querySelector("#personal-wechat-target"))'
+        ))
       )
-      if (!isMain) return
+        return
       attached = true
-      if (!window.isVisible()) {
-        await new Promise((resolve) => window.once('ready-to-show', () => setImmediate(resolve)))
-      }
-      writeFileSync(
-        join(directory, 'project-controls.png'),
-        (await window.webContents.capturePage()).toPNG()
-      )
-      await window.webContents.executeJavaScript(`(async()=>{
-        const input=document.querySelector(${JSON.stringify(batchTest ? '#personal-wechat-batch-targets' : '#personal-wechat-target')});
-        if(input.value!=='Q')throw new Error('test_target_mismatch');
-        const section=document.querySelector(${JSON.stringify(batchTest ? '[aria-labelledby="personal-wechat-batch-heading"]' : '[aria-labelledby="personal-wechat-heading"]')});
-        let button;
-        const deadline=Date.now()+5000;
-        do {
-          button=Array.from(section.querySelectorAll('button')).find(b=>b.textContent.includes(${JSON.stringify(batchTest ? '启动批量自动回复' : process.env.AUTOREPLY_WECHAT_TEST_CURRENT_CHAT === '1' ? '接入已打开的聊天' : '启动个人微信')}));
-          if(button&&!button.disabled)break;
-          await new Promise(resolve=>setTimeout(resolve,50));
-        } while(Date.now()<deadline);
-        if(!button||button.disabled)throw new Error('test_start_unavailable');button.click();
+      // did-finish-load can precede the main window's first ready-to-show.
+      // Wait for that show to finish before focusing WeChat, otherwise it can
+      // steal foreground back in the middle of the first screenshot request.
+      const visibleDeadline = Date.now() + 10000
+      while (!window.isVisible() && Date.now() < visibleDeadline)
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      if (!window.isVisible()) throw new Error('test_window_not_ready')
+      const initial = await window.webContents.executeJavaScript('window.foregroundWechat.status()')
+      for (const row of initial.records) initialIds.add(row.id)
+      const models = await window.webContents.executeJavaScript(`(async()=>{
+        const settings=await window.electron.invoke('settings:getAll');
+        const ids=[...new Set([settings.globalVisionModelId,settings.globalReplyModelId].filter(Boolean))];
+        if(!ids.length)return false;
+        for(const id of ids){if(!(await window.electron.invoke('model:testConnection',id)).success)return false;}
+        return true;
       })()`)
+      if (!models) return finish(window, false, 'model_connection_failed')
+      await window.webContents.executeJavaScript(`(async()=>{
+        const input=document.querySelector('#personal-wechat-target');
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(target)});
+        input.dispatchEvent(new Event('input',{bubbles:true}));
+        const deadline=Date.now()+5000;
+        let button;
+        do {
+          button=Array.from(document.querySelector('[aria-labelledby="personal-wechat-heading"]').querySelectorAll('button')).find(element=>element.textContent.includes(${JSON.stringify(process.env.AUTOREPLY_WECHAT_TEST_CURRENT_CHAT === '1' ? '接入已打开的聊天' : '启动个人微信')}));
+          if(button&&!button.disabled&&input.value===${JSON.stringify(target)})break;
+          await new Promise(resolve=>setTimeout(resolve,50));
+        }while(Date.now()<deadline);
+        if(!button||button.disabled)throw new Error('test_start_unavailable');
+        button.click();
+      })()`)
+      const started = Date.now()
       let reading = false,
         lastStage = ''
       timer = setInterval(async () => {
-        if (reading || window.isDestroyed()) return
+        if (reading || finished || window.isDestroyed()) return
         reading = true
         try {
           const status = await window.webContents.executeJavaScript(
-            batchTest ? 'window.foregroundWechat.batchStatus()' : 'window.foregroundWechat.status()'
+            'window.foregroundWechat.status()'
           )
           const summary = {
             state: status.state,
             reason: status.reason,
-            target: batchTest ? 'Q' : status.target,
-            ...(batchTest
-              ? {
-                  mode: 'batch',
-                  discovered: status.discovered,
-                  pages: status.pages,
-                  pending: status.pending,
-                  scanComplete: status.scanComplete,
-                  issues: status.issues
-                    .filter((issue) => issue.target === 'Q')
-                    .map((issue) => ({ target: 'Q', reason: issue.reason }))
-                }
-              : {}),
-            records: status.records.map((r) => ({
-              id: r.id,
-              state: r.state,
-              createdAt: r.createdAt
+            target: status.target,
+            records: status.records.map((row) => ({
+              id: row.id,
+              state: row.state,
+              createdAt: row.createdAt
             })),
             at: Date.now()
           }
-          writeFileSync(join(directory, 'status.json'), JSON.stringify(summary, null, 2) + '\n')
+          writeFileSync(join(directory, 'status.json'), JSON.stringify(summary, null, 2))
           const stage = status.state + ':' + status.reason
           if (stage !== lastStage) {
             lastStage = stage
-            process.stdout.write(
-              'Project WeChat test: ' +
-                stage +
-                '; target=' +
-                (batchTest ? 'Q' : status.target) +
-                '\n'
-            )
-            if (status.state === 'paused') {
-              await window.webContents.executeJavaScript(
-                'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))'
-              )
-              writeFileSync(
-                join(directory, 'project-result.png'),
-                (await window.webContents.capturePage()).toPNG()
-              )
-            }
+            process.stdout.write('Personal WeChat: ' + stage + '; target=' + status.target + '\n')
           }
+          if (
+            status.records.some(
+              (row) => row.target === target && row.state === 'sent' && !initialIds.has(row.id)
+            )
+          )
+            return finish(window, true, 'reply_echo_verified', status)
+          if (status.state === 'paused' && status.reason !== 'user_pause')
+            return finish(window, false, status.reason, status)
+          if (Date.now() - started > timeout)
+            return finish(window, false, 'new_inbound_not_received_or_flow_incomplete', status)
         } catch {
-          process.stderr.write('Project WeChat status unavailable\n')
+          /* Shutdown can close the renderer between observations. */
         } finally {
           reading = false
         }
-      }, 2000)
-      process.stdout.write('Project WeChat test report: ' + join(directory, 'status.json') + '\n')
-    } catch (error) {
-      writeFileSync(
-        join(directory, 'launch-error.json'),
-        JSON.stringify({
-          code: /^[a-z_]+$/.test(error.message) ? error.message : 'project_test_launch_failed'
-        }) + '\n'
+      }, 1000)
+      process.stdout.write(
+        'Personal WeChat waiting for a NEW inbound message from ' +
+          target +
+          '; report=' +
+          join(directory, 'status.json') +
+          '\n'
       )
-      process.stderr.write('Project WeChat test launch failed: ' + error.message + '\n')
+    } catch (error) {
+      await finish(
+        window,
+        false,
+        /^[a-z_]+$/.test(error.message) ? error.message : 'test_launch_failed'
+      )
     }
   })
 })

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, lstat, rename, realpath, writeFile } from 'node:fs/promises'
+import { access, mkdir, lstat, rename, realpath, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -28,7 +28,12 @@ async function run(): Promise<void> {
     (await realpath(staging)).toLowerCase() !== staging.toLowerCase()
   )
     throw new Error('native_publish_path_invalid')
-  const dotnet = join(workspace, '.local', 'toolchain', 'dotnet', 'dotnet.exe')
+  let dotnet = join(workspace, '.local', 'toolchain', 'dotnet', 'dotnet.exe')
+  try {
+    await access(dotnet)
+  } catch {
+    dotnet = 'dotnet'
+  }
   phase = 'dotnet-publish'
   await new Promise<void>((done, reject) => {
     const child = spawn(

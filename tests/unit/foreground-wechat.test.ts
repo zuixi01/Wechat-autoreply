@@ -36,11 +36,13 @@ function fixture(polling = false) {
     generate: vi.fn(async () => '你好，已收到'),
     dispatch: vi.fn(async () => 'sent' as const)
   }
-  const runtime = new ForegroundWechatRuntime(driver, journal, polling)
+  const checkpoint = vi.fn()
+  const runtime = new ForegroundWechatRuntime(driver, journal, polling, checkpoint)
   return {
     runtime,
     driver,
     records,
+    checkpoint,
     set: (value: ForegroundObservation) => {
       current = value
     }
@@ -270,6 +272,26 @@ describe('project-owned foreground WeChat runtime', () => {
     f.set(observation([msg('历史消息'), msg('新问题')]))
     await Promise.all([f.runtime.tick(), f.runtime.tick(), f.runtime.tick()])
     expect(f.driver.dispatch).toHaveBeenCalledTimes(1)
+  })
+  it('persists a confirmed echo even when pause races the positive send receipt', async () => {
+    const f = fixture()
+    await f.runtime.start('Q')
+    f.set(observation([msg('历史消息'), msg('新问题')]))
+    vi.mocked(f.driver.dispatch).mockImplementationOnce(async () => {
+      void f.runtime.pause()
+      return 'sent'
+    })
+    await f.runtime.tick()
+    expect(f.runtime.status().state).toBe('paused')
+    const saved = f.checkpoint.mock.calls.at(-1)![0]
+    expect(saved.pending).toBe(false)
+    expect(saved.ownEcho).toBe('你好，已收到')
+    f.set(observation([msg('历史消息'), msg('新问题'), msg('你好，已收到', 'outbound')]))
+    await f.runtime.start('Q', 'current_chat', undefined, saved)
+    await f.runtime.tick()
+    expect(f.runtime.status().state).toBe('running')
+    expect(f.driver.dispatch).toHaveBeenCalledTimes(1)
+    await f.runtime.pause()
   })
   it('rejects switching to a different test target while active', async () => {
     const f = fixture()

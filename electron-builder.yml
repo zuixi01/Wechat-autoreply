@@ -26,8 +26,6 @@ files:
   - '!scripts/**'
   - '!design-qa.md'
   - '!skills/**'
-  - '!sentpredict/predict.py'
-  - '!sentpredict/models/**'
 asarUnpack:
   - resources/**
 win:

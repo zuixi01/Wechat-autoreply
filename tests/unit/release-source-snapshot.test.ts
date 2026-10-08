@@ -51,13 +51,17 @@ it('omits generated/native intermediates, personal settings, credentials and dat
   const { root, id } = await fixture()
   await mkdir(join(root, 'native/bin'))
   await mkdir(join(root, 'native/obj'))
+  await mkdir(join(root, 'tests/native/InputFixture/bin'), { recursive: true })
+  await mkdir(join(root, 'tests/native/InputFixture/obj'), { recursive: true })
   for (const path of [
     'src/.env',
     'src/.env.local',
     'src/credential.key',
     'src/profile.sqlite',
     'native/bin/old.dll',
-    'native/obj/project.assets.json'
+    'native/obj/project.assets.json',
+    'tests/native/InputFixture/bin/fixture.exe',
+    'tests/native/InputFixture/obj/project.assets.json'
   ])
     await writeFile(join(root, path), 'PRIVATE_RUNTIME')
   const { sourceRoot, manifest } = await createReleaseSourceSnapshot(root, id)

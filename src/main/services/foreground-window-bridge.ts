@@ -29,8 +29,9 @@ export type ForegroundWindow = z.infer<typeof ForegroundWindowSchema>
 export interface ForegroundWindows {
   inspect(signal: AbortSignal): Promise<z.infer<typeof StateSchema>>
   focus(binding: ForegroundWindow, signal: AbortSignal): Promise<void>
+  typeText(binding: ForegroundWindow, text: string, signal: AbortSignal): Promise<void>
 }
-/** Only the pinned project helper can inspect/focus windows; no text/input/send command exists. */
+/** The pinned helper types Unicode into the bound foreground window; it cannot press Enter. */
 export class ForegroundWindowBridge implements ForegroundWindows {
   async inspect(signal: AbortSignal): Promise<z.infer<typeof StateSchema>> {
     return this.request('inspect', signal)
@@ -38,10 +39,23 @@ export class ForegroundWindowBridge implements ForegroundWindows {
   async focus(binding: ForegroundWindow, signal: AbortSignal): Promise<void> {
     await this.request('focus', signal, binding)
   }
+  async typeText(binding: ForegroundWindow, text: string, signal: AbortSignal): Promise<void> {
+    if (
+      !text ||
+      text.length > 4096 ||
+      Array.from(text).some(
+        (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127
+      ) ||
+      Buffer.from(text, 'utf8').toString('utf8') !== text
+    )
+      throw new Error('text_invalid')
+    await this.request('type', signal, binding, text)
+  }
   private async request(
-    command: 'inspect' | 'focus',
+    command: 'inspect' | 'focus' | 'type',
     signal: AbortSignal,
-    binding?: ForegroundWindow
+    binding?: ForegroundWindow,
+    text?: string
   ): Promise<z.infer<typeof StateSchema>> {
     if (signal.aborted) throw new Error('cancelled')
     const path = app.isPackaged
@@ -94,7 +108,22 @@ export class ForegroundWindowBridge implements ForegroundWindows {
           }
           if (!buffer.includes('\n')) return
           try {
-            const result = StateSchema.parse(JSON.parse(buffer.slice(0, buffer.indexOf('\n'))))
+            const response = JSON.parse(buffer.slice(0, buffer.indexOf('\n')))
+            if (
+              response.id === id &&
+              response.ok === false &&
+              [
+                'window_changed',
+                'foreground_lost',
+                'text_invalid',
+                'input_failed',
+                'input_state_changed'
+              ].includes(response.error)
+            ) {
+              finish(new Error(response.error))
+              return
+            }
+            const result = StateSchema.parse(response)
             if (result.id !== id) throw new Error()
             finish(undefined, result)
           } catch {
@@ -107,7 +136,14 @@ export class ForegroundWindowBridge implements ForegroundWindows {
           abort()
           return
         }
-        child.stdin.write(JSON.stringify({ id, command, ...(binding ? { binding } : {}) }) + '\n')
+        child.stdin.write(
+          JSON.stringify({
+            id,
+            command,
+            ...(binding ? { binding } : {}),
+            ...(text !== undefined ? { text } : {})
+          }) + '\n'
+        )
       } catch {
         finish(new Error('desktop_input_unavailable'))
       }

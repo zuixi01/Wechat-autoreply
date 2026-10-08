@@ -1,6 +1,12 @@
 import { defineConfig } from 'vitest/config'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
 
 export default defineConfig({
+  // The standalone server also installs pg. Use one module identity in this test
+  // process so transaction mocks cover server imports as well as desktop tools.
+  resolve: { alias: [{ find: /^pg$/, replacement: require.resolve('pg') }] },
   test: {
     environment: 'node',
     include: [

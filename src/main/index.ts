@@ -1,29 +1,18 @@
 import { app, shell, BrowserWindow, nativeImage, nativeTheme, powerMonitor } from 'electron'
 import { join } from 'path'
-import { mkdirSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import iconFile from '../../resources/icon.png?asset'
 import { checkAndRequestPermissions } from './permission'
 import Store from 'electron-store'
 import { AIClient } from '../core/ai-client'
-import type { DesktopDevice } from '../core/device'
-import { RuntimeHost } from '../core/runtime-host'
-import {
-  createInitialSystemChannelState,
-  GenericChannelSession,
-  ModeHandler
-} from '../core/generic-channel-session'
-import { AppType, BoxRegions, CaptureStrategy, isWechatLike } from '../core/rpa/types'
+import { AppType, BoxRegions, CaptureStrategy } from '../core/rpa/types'
 import { runBoxSelectWizard, type WizardStepKey } from './overlay-window'
 import {
-  BUILTIN_DOUBAO_PROVIDER_ID,
   getBuiltinDoubaoInstalledInfo,
   getBuiltinDoubaoManifestForUi,
   getInstalledProviderManifest,
   installProviderFromUrl,
-  InstalledProviderInfo,
-  loadBuiltinDoubaoProvider,
-  loadInstalledProvider
+  InstalledProviderInfo
 } from './provider-bundle'
 import {
   SkillEngineController,
@@ -35,29 +24,26 @@ import {
 import {
   listTraceSessions,
   readTraceScreenshot,
-  readTraceSession,
-  TraceRecorder
+  readTraceSession
 } from '../core/trace/trace-recorder'
-import { TraceStepInput } from '../core/trace/trace-types'
 import { ExperienceStore, NewExperienceCard } from '../core/memory/experience-store'
 import { induceCardsFromSession } from '../core/memory/learn-from-session'
-import { SentimentClassifier, ensurePythonDeps, checkPythonInstalled, ensureScriptsCopied } from '../core/sentiment/classifier'
 import { ModelConfig, ModelCapability, ReplyMode, SpecificObject } from '../core/types'
-import { spawn as spawnChild, ChildProcess } from 'child_process'
 import { randomUUID } from 'crypto'
 import { registerAgentIpc } from './ipc/agent-ipc'
 import { registerAdminIpc } from './ipc/admin-ipc'
 import type { AdminConnection } from './services/admin-connection'
 import { registerKnowledgeIpc } from './ipc/knowledge-ipc'
 import { buildContextSection } from '../core/ai-client'
-import { KnowledgeProvider } from '../core/knowledge/knowledge-provider'
 import type { KnowledgeStore } from '../core/knowledge/knowledge-store'
 import type { DesktopAgentRuntime } from './services/desktop-agent-runtime'
 import { createLegacyIpc } from './ipc/trusted-ipc'
 import { pauseAllReplyRuntimes } from './services/legacy-runtime-control'
 import { LearningStore } from '../core/memory/learning-store'
-import { MemoryProvider } from '../core/memory/memory-provider'
-import { StructuredLearningReviewer, type LearningReviewTransport } from '../core/memory/learning-reviewer'
+import {
+  StructuredLearningReviewer,
+  type LearningReviewTransport
+} from '../core/memory/learning-reviewer'
 import { HttpLearningReviewTransport } from '../core/memory/learning-transport'
 import { LearningService } from './services/learning-service'
 import { LearningKnowledgeAnswers } from './services/learning-knowledge'
@@ -66,12 +52,18 @@ import { learningCalibrationRules } from './services/learning-validation-policy'
 import { registerLearningIpc } from './ipc/learning-ipc'
 import { registerLearningSubmissionIpc } from './ipc/learning-submission-ipc'
 import { learningHash } from '../core/memory/learning-scope'
-import { resolveLearningReviewModel, learningReviewModelDirectory } from '../core/memory/learning-model-configuration'
+import {
+  resolveLearningReviewModel,
+  learningReviewModelDirectory
+} from '../core/memory/learning-model-configuration'
 import { LearningSettingsSchema } from '../shared/contracts/learning-memory'
 import { defaultReplyMode, objectReplyPolicy } from '../shared/reply-rules'
 import { registerForegroundWechatIpc } from './ipc/foreground-wechat-ipc'
 import { knowledgeInstructions } from '../core/knowledge/knowledge-reply'
-import { HostModelConfigurationAudit, hostModelConfigurationHash } from './services/host-model-configuration-audit'
+import {
+  HostModelConfigurationAudit,
+  hostModelConfigurationHash
+} from './services/host-model-configuration-audit'
 let hostModelAudit: HostModelConfigurationAudit | undefined
 let foregroundWechat: ReturnType<typeof registerForegroundWechatIpc> | undefined
 let learningService: LearningService
@@ -79,6 +71,7 @@ let reliableRuntime: DesktopAgentRuntime | undefined
 let knowledgeStore: KnowledgeStore
 let reliableQuitRequested = false
 let adminConnection: AdminConnection | undefined
+let advancedInitialization: Promise<void> | undefined
 // A second process must not open or recover the first process's durable outbox.
 if (!app.requestSingleInstanceLock()) app.exit(0)
 app.on('second-instance', () => {
@@ -98,11 +91,41 @@ const FIXED_ARK_MODEL = 'doubao-seed-2-0-lite-260215'
 const FIXED_ARK_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3'
 
 const PROVIDER_PRESETS = [
-  { id: 'volcengine-ark', name: '火山方舟', defaultBaseURL: 'https://ark.cn-beijing.volces.com/api/v3', defaultModel: 'doubao-seed-2-0-lite-260215', defaultCapabilities: ['text', 'vision'] },
-  { id: 'aliyun-bailian', name: '阿里云百炼', defaultBaseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1', defaultModel: 'qwen-vl-plus', defaultCapabilities: ['text', 'vision'] },
-  { id: 'openai', name: 'OpenAI', defaultBaseURL: 'https://api.openai.com/v1', defaultModel: 'gpt-4o', defaultCapabilities: ['text', 'vision'] },
-  { id: 'deepseek', name: 'DeepSeek', defaultBaseURL: 'https://api.deepseek.com/v1', defaultModel: 'deepseek-chat', defaultCapabilities: ['text'] },
-  { id: 'custom', name: '自定义', defaultBaseURL: '', defaultModel: '', defaultCapabilities: ['text'] }
+  {
+    id: 'volcengine-ark',
+    name: '火山方舟',
+    defaultBaseURL: 'https://ark.cn-beijing.volces.com/api/v3',
+    defaultModel: 'doubao-seed-2-0-lite-260215',
+    defaultCapabilities: ['text', 'vision']
+  },
+  {
+    id: 'aliyun-bailian',
+    name: '阿里云百炼',
+    defaultBaseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    defaultModel: 'qwen-vl-plus',
+    defaultCapabilities: ['text', 'vision']
+  },
+  {
+    id: 'openai',
+    name: 'OpenAI',
+    defaultBaseURL: 'https://api.openai.com/v1',
+    defaultModel: 'gpt-4o',
+    defaultCapabilities: ['text', 'vision']
+  },
+  {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    defaultBaseURL: 'https://api.deepseek.com/v1',
+    defaultModel: 'deepseek-chat',
+    defaultCapabilities: ['text']
+  },
+  {
+    id: 'custom',
+    name: '自定义',
+    defaultBaseURL: '',
+    defaultModel: '',
+    defaultCapabilities: ['text']
+  }
 ]
 
 interface PerAppCapture {
@@ -152,19 +175,15 @@ function persistSettings(next: Partial<AppSettings>): void {
     return
   }
   const readHash = (): string => hostModelConfigurationHash(normalizeSettings(settingsStore.store))
-  const nextHash = hostModelConfigurationHash(normalizeSettings({ ...settingsStore.store, ...next }))
+  const nextHash = hostModelConfigurationHash(
+    normalizeSettings({ ...settingsStore.store, ...next })
+  )
   hostModelAudit.change(nextHash, write, readHash)
 }
 function errorMessage(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string')
     return error.message || String(error)
   return String(error)
-}
-
-function errorStack(error: unknown): string {
-  if (error && typeof error === 'object' && 'stack' in error && typeof error.stack === 'string')
-    return error.stack || '无堆栈信息'
-  return '无堆栈信息'
 }
 
 type ProviderConfigFieldType = 'text' | 'password' | 'url' | 'select' | 'textarea'
@@ -241,33 +260,15 @@ const settingsStore = new StoreClass<AppSettings>({
   }
 })
 
-const runtimeInstances = new Map<string, RuntimeHost<ReturnType<typeof createInitialSystemChannelState>>>()
-let systemSession: GenericChannelSession | null = null
-let systemRuntime: RuntimeHost<ReturnType<typeof createInitialSystemChannelState>> | null = null
-let runtimeDevice: DesktopDevice | null = null
 let settingsWindow: BrowserWindow | null = null
 let memoryWindow: BrowserWindow | null = null
-let sentimentClassifier: SentimentClassifier | null = null
-let trainingProcess: ChildProcess | null = null
 const modeUserInputCache = new Map<string, string>()
 
 // ── 工作记忆（work-trace + 经验卡片）单例，首次使用时初始化 ──
-let traceRecorderInstance: TraceRecorder | null = null
 let experienceStoreInstance: ExperienceStore | null = null
 
 function worktraceBaseDir(): string {
   return join(app.getPath('userData'), 'worktrace')
-}
-
-function sentimentModelDir(): string {
-  return join(app.getPath('userData'), 'sentpredict-models')
-}
-
-function getTraceRecorder(): TraceRecorder {
-  if (!traceRecorderInstance) {
-    traceRecorderInstance = new TraceRecorder(worktraceBaseDir())
-  }
-  return traceRecorderInstance
 }
 
 function getExperienceStore(): ExperienceStore {
@@ -298,9 +299,17 @@ function createWindow(): void {
     }
   })
 
-  mainWindow.on('ready-to-show', () => {
+  let shown = false
+  const showOnce = (): void => {
+    if (shown || mainWindow.isDestroyed()) return
+    shown = true
     mainWindow.show()
-  })
+  }
+  mainWindow.once('ready-to-show', showOnce)
+  // Some Windows rendering configurations do not emit ready-to-show while
+  // initially hidden. Loaded UI must still appear, and must only show once so
+  // a late paint event cannot take foreground back from the selected WeChat.
+  mainWindow.webContents.once('did-finish-load', showOnce)
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -552,113 +561,264 @@ async function fetchProviderHub(url = DEFAULT_PROVIDER_HUB_URL): Promise<Provide
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.autoreply.desktop')
-  const legacyIpc = createLegacyIpc(join(__dirname, '../renderer/index.html'), is.dev ? process.env.ELECTRON_RENDERER_URL : undefined)
-  reliableRuntime = await registerAgentIpc(join(__dirname, '../renderer/index.html'), app.getPath('userData'), is.dev ? process.env.ELECTRON_RENDERER_URL : undefined)
-  adminConnection = registerAdminIpc(join(__dirname, '../renderer/index.html'), app.getPath('userData'), is.dev ? process.env.ELECTRON_RENDERER_URL : undefined)
-  const learningWorkspaceId = settingsStore.get('learningWorkspaceId') as string || randomUUID()
-  settingsStore.set('learningWorkspaceId', learningWorkspaceId)
-  const learningStore = new LearningStore(join(app.getPath('userData'), 'worktrace', 'memory', 'learning.sqlite'))
-  hostModelAudit = new HostModelConfigurationAudit(
-    join(app.getPath('userData'), 'worktrace', 'memory', 'learning.sqlite'),
-    hostModelConfigurationHash(normalizeSettings(settingsStore.store))
+  const legacyIpc = createLegacyIpc(
+    join(__dirname, '../renderer/index.html'),
+    is.dev ? process.env.ELECTRON_RENDERER_URL : undefined
   )
-  const learningTransport: LearningReviewTransport = { complete: (request, signal) => {
-    const settings = normalizeSettings(settingsStore.store)
-    hostModelAudit!.reconcile(hostModelConfigurationHash(settings))
-    const normal = resolveModelConfig(settings, settings.globalReplyModelId)
-    const model = resolveLearningReviewModel(LearningSettingsSchema.parse({ reviewModelId: request.reviewModelId, maxReviewInputTokens: request.maxInputTokens }),
-      settings.models.map(entry => ({ ...entry, ...resolveModelConfig(settings, entry.id) })),
-      { id: settings.globalReplyModelId || 'legacy-reply', provider: settings.models.find(entry => entry.id === settings.globalReplyModelId)?.provider || 'legacy', ...normal })
-    return new HttpLearningReviewTransport({ apiKey: model.apiKey, baseURL: model.baseURL, model: model.modelName }).complete(request, signal)
-  } }
-  const learningModelStamp = (settings: AppSettings, id: string): object => {
-    const entry = settings.models.find(model => model.id === id)
-    const configured = resolveModelConfig(settings, id)
-    return { id: id || 'legacy-reply', provider: entry?.provider || 'legacy', model: configured.modelName, baseURL: configured.baseURL, capabilities: configured.capabilities }
-  }
-  const learningValidation = new LearningProductValidation(learningStore, {
-    knowledge: () => knowledgeStore,
-    transport: learningTransport,
-    replyTransport: { complete: (request, signal) => learningTransport.complete({ ...request, reviewModelId: '' }, signal) },
-    policy: (scope, modeId) => {
+  const enableAdvanced = (): Promise<void> =>
+    (advancedInitialization ??= (async () => {
+      reliableRuntime = await registerAgentIpc(
+        join(__dirname, '../renderer/index.html'),
+        app.getPath('userData'),
+        is.dev ? process.env.ELECTRON_RENDERER_URL : undefined
+      )
+      adminConnection = registerAdminIpc(
+        join(__dirname, '../renderer/index.html'),
+        app.getPath('userData'),
+        is.dev ? process.env.ELECTRON_RENDERER_URL : undefined
+      )
+      const learningWorkspaceId =
+        (settingsStore.get('learningWorkspaceId') as string) || randomUUID()
+      settingsStore.set('learningWorkspaceId', learningWorkspaceId)
+      const learningStore = new LearningStore(
+        join(app.getPath('userData'), 'worktrace', 'memory', 'learning.sqlite')
+      )
+      hostModelAudit = new HostModelConfigurationAudit(
+        join(app.getPath('userData'), 'worktrace', 'memory', 'learning.sqlite'),
+        hostModelConfigurationHash(normalizeSettings(settingsStore.store))
+      )
+      const learningTransport: LearningReviewTransport = {
+        complete: (request, signal) => {
+          const settings = normalizeSettings(settingsStore.store)
+          hostModelAudit!.reconcile(hostModelConfigurationHash(settings))
+          const normal = resolveModelConfig(settings, settings.globalReplyModelId)
+          const model = resolveLearningReviewModel(
+            LearningSettingsSchema.parse({
+              reviewModelId: request.reviewModelId,
+              maxReviewInputTokens: request.maxInputTokens
+            }),
+            settings.models.map((entry) => ({
+              ...entry,
+              ...resolveModelConfig(settings, entry.id)
+            })),
+            {
+              id: settings.globalReplyModelId || 'legacy-reply',
+              provider:
+                settings.models.find((entry) => entry.id === settings.globalReplyModelId)
+                  ?.provider || 'legacy',
+              ...normal
+            }
+          )
+          return new HttpLearningReviewTransport({
+            apiKey: model.apiKey,
+            baseURL: model.baseURL,
+            model: model.modelName
+          }).complete(request, signal)
+        }
+      }
+      const learningModelStamp = (settings: AppSettings, id: string): object => {
+        const entry = settings.models.find((model) => model.id === id)
+        const configured = resolveModelConfig(settings, id)
+        return {
+          id: id || 'legacy-reply',
+          provider: entry?.provider || 'legacy',
+          model: configured.modelName,
+          baseURL: configured.baseURL,
+          capabilities: configured.capabilities
+        }
+      }
+      const learningValidation = new LearningProductValidation(learningStore, {
+        knowledge: () => knowledgeStore,
+        transport: learningTransport,
+        replyTransport: {
+          complete: (request, signal) =>
+            learningTransport.complete({ ...request, reviewModelId: '' }, signal)
+        },
+        policy: (scope, modeId) => {
+          const settings = normalizeSettings(settingsStore.store)
+          const reviewId =
+            learningStore.settings(scope).reviewModelId || settings.globalReplyModelId
+          return {
+            rules: learningCalibrationRules(
+              scope,
+              modeId,
+              ensureSystemModes(settings.modes),
+              settings.globalDefaultModeId
+            ),
+            validatorVersion: learningHash({
+              implementation: 'memory-calibration-human-origin-v2',
+              review: learningModelStamp(settings, reviewId),
+              reply: learningModelStamp(settings, settings.globalReplyModelId)
+            })
+          }
+        }
+      })
+      learningService = new LearningService(
+        learningStore,
+        new StructuredLearningReviewer(learningTransport),
+        {
+          workspaceId: learningWorkspaceId,
+          validation: learningValidation,
+          curation: {
+            transport: learningTransport,
+            fingerprint: (scope) => {
+              const settings = normalizeSettings(settingsStore.store)
+              return learningHash({
+                implementation: 'memory-curator-v1',
+                model: learningModelStamp(
+                  settings,
+                  learningStore.settings(scope).reviewModelId || settings.globalReplyModelId
+                )
+              })
+            }
+          }
+        }
+      )
+      try {
+        learningStore.migrateLegacy(join(worktraceBaseDir(), 'memory', 'cards.json'))
+      } catch {
+        console.error('[Learning] 旧卡片迁移未完成，原文件已保留，请在工作记忆中检查。')
+      }
+      reliableRuntime.configureLearningSubmissions(learningService)
+      registerLearningSubmissionIpc(
+        join(__dirname, '../renderer/index.html'),
+        is.dev ? process.env.ELECTRON_RENDERER_URL : undefined,
+        reliableRuntime,
+        (scope) => {
+          if (!reliableRuntime!.learningBackend(scope)) learningService.assertScope(scope)
+        }
+      )
+      registerLearningIpc(
+        join(__dirname, '../renderer/index.html'),
+        is.dev ? process.env.ELECTRON_RENDERER_URL : undefined,
+        learningService,
+        () => learningService.accountScope(normalizeSettings(settingsStore.store).appType),
+        (scope) => reliableRuntime!.learningBackend(scope),
+        () => {
+          const settings = normalizeSettings(settingsStore.store)
+          return learningReviewModelDirectory(
+            settings.models.map((entry) => ({
+              ...entry,
+              ...resolveModelConfig(settings, entry.id)
+            }))
+          )
+        },
+        {
+          observed: (episode) => reliableRuntime!.observeLearningEpisode(episode),
+          forgetLocal: (scope, run) => reliableRuntime!.forgetLocalLearning(scope, run)
+        }
+      )
+      learningService.start()
+    })())
+  legacyIpc.handle('features:advanced-enable', () => enableAdvanced())
+  knowledgeStore = registerKnowledgeIpc(
+    join(__dirname, '../renderer/index.html'),
+    app.getPath('userData'),
+    is.dev ? process.env.ELECTRON_RENDERER_URL : undefined,
+    async (question, modeId, objectId, service) => {
       const settings = normalizeSettings(settingsStore.store)
-      const reviewId = learningStore.settings(scope).reviewModelId || settings.globalReplyModelId
-      return { rules: learningCalibrationRules(scope, modeId, ensureSystemModes(settings.modes), settings.globalDefaultModeId),
-        validatorVersion: learningHash({ implementation: 'memory-calibration-human-origin-v2', review: learningModelStamp(settings, reviewId), reply: learningModelStamp(settings, settings.globalReplyModelId) }) }
+      const mode = ensureSystemModes(settings.modes).find((item) => item.id === modeId)
+      if (!mode) throw new Error('回复模式不存在，请重新选择。')
+      const object = objectId
+        ? mode.specificObjects.find((item) => item.id === objectId)
+        : undefined
+      if (objectId && !object) throw new Error('对象用户不属于当前模式，请重新选择。')
+      const model = resolveModelConfig(settings, settings.globalReplyModelId)
+      const policy = object
+        ? objectReplyPolicy(
+            mode,
+            object,
+            defaultReplyMode(ensureSystemModes(settings.modes), settings.globalDefaultModeId)
+          )
+        : mode
+      const rules =
+        policy.prompt +
+        (policy.unifiedPrefix ? `\n回复使用统一开头：${policy.unifiedPrefix}` : '') +
+        buildContextSection({ objectTitle: object?.title, objectRelation: object?.relationship })
+      await enableAdvanced()
+      const objectScope = object
+        ? {
+            ...learningService.accountScope('generic'),
+            conversationId: `object:${learningHash({ modeId, objectId: object.id })}`
+          }
+        : undefined
+      return new LearningKnowledgeAnswers(service, learningService, () =>
+        console.error('[Learning] 案例记录失败，试答仍可使用。')
+      ).answer(
+        question,
+        rules,
+        async (system, input) => {
+          if (!model.apiKey) throw new Error('请先在模型配置中添加回复模型，并在主页选择该模型。')
+          const client = new AIClient({
+            apiKey: model.apiKey,
+            model: model.modelName,
+            baseURL: model.baseURL
+          })
+          try {
+            return await client.getTextReply(system, input)
+          } catch {
+            throw new Error('模型调用失败，请先测试模型连接，或稍后重试。')
+          }
+        },
+        objectScope
+      )
     }
-  })
-  learningService = new LearningService(learningStore, new StructuredLearningReviewer(learningTransport), { workspaceId: learningWorkspaceId, validation: learningValidation,
-    curation: { transport: learningTransport, fingerprint: scope => {
+  )
+  foregroundWechat = registerForegroundWechatIpc(
+    join(__dirname, '../renderer/index.html'),
+    app.getPath('userData'),
+    (target) => {
       const settings = normalizeSettings(settingsStore.store)
-      return learningHash({ implementation: 'memory-curator-v1', model: learningModelStamp(settings, learningStore.settings(scope).reviewModelId || settings.globalReplyModelId) })
-    } }
+      const modes = ensureSystemModes(settings.modes)
+      const common = defaultReplyMode(modes, settings.globalDefaultModeId)
+      const matches = modes.flatMap((owner) =>
+        owner.specificObjects
+          .filter((object) => object.name === target)
+          .map((object) => ({ owner, object }))
+      )
+      if (matches.length > 1) throw new Error('target_rules_ambiguous')
+      const match = matches[0]
+      const policy = match ? objectReplyPolicy(match.owner, match.object, common) : common
+      if (!policy) throw new Error('rules_not_configured')
+      if (match?.object.autoReply === false) throw new Error('target_auto_reply_disabled')
+      const rules =
+        policy.prompt +
+        (policy.unifiedPrefix ? `\n回复使用统一开头：${policy.unifiedPrefix}` : '') +
+        buildContextSection({
+          objectTitle: match?.object.title,
+          objectRelation: match?.object.relationship
+        })
+      const vision = resolveModelConfig(settings, settings.globalVisionModelId)
+      const reply = resolveModelConfig(settings, settings.globalReplyModelId)
+      return {
+        vision,
+        reply,
+        rules,
+        revision: learningHash({ vision, reply, rules, knowledge: knowledgeStore.version() }),
+        knowledge: (question) => {
+          if (!knowledgeStore.settings().enabled || !knowledgeStore.snapshot().documents.length)
+            return { instructions: '' }
+          const { hits } = knowledgeStore.search(question)
+          const fallback = knowledgeStore.settings().fallbackReply
+          return hits.length
+            ? { instructions: knowledgeInstructions(hits, fallback) }
+            : { instructions: '', fallback }
+        }
+      }
+    },
+    is.dev ? process.env.ELECTRON_RENDERER_URL : undefined
+  )
+  powerMonitor.on('suspend', () => {
+    void reliableRuntime?.pause('suspended')
+    void foregroundWechat?.pause()
   })
-  try { learningStore.migrateLegacy(join(worktraceBaseDir(), 'memory', 'cards.json')) }
-  catch { console.error('[Learning] 旧卡片迁移未完成，原文件已保留，请在工作记忆中检查。') }
-  reliableRuntime.configureLearningSubmissions(learningService)
-  registerLearningSubmissionIpc(join(__dirname, '../renderer/index.html'), is.dev ? process.env.ELECTRON_RENDERER_URL : undefined, reliableRuntime, scope => {
-    if (!reliableRuntime!.learningBackend(scope)) learningService.assertScope(scope)
+  powerMonitor.on('lock-screen', () => {
+    void reliableRuntime?.pause('locked')
+    void foregroundWechat?.pause()
   })
-  registerLearningIpc(join(__dirname, '../renderer/index.html'), is.dev ? process.env.ELECTRON_RENDERER_URL : undefined,
-    learningService, () => learningService.accountScope(normalizeSettings(settingsStore.store).appType),
-    scope => reliableRuntime!.learningBackend(scope), () => {
-      const settings = normalizeSettings(settingsStore.store)
-      return learningReviewModelDirectory(settings.models.map(entry => ({ ...entry, ...resolveModelConfig(settings, entry.id) })))
-    }, {
-      observed: episode => reliableRuntime!.observeLearningEpisode(episode),
-      forgetLocal: (scope, run) => reliableRuntime!.forgetLocalLearning(scope, run)
-    })
-  learningService.start()
-  knowledgeStore = registerKnowledgeIpc(join(__dirname, '../renderer/index.html'), app.getPath('userData'), is.dev ? process.env.ELECTRON_RENDERER_URL : undefined, async (question, modeId, objectId, service) => {
-    const settings = normalizeSettings(settingsStore.store)
-    const mode = ensureSystemModes(settings.modes).find(item => item.id === modeId)
-    if (!mode) throw new Error('回复模式不存在，请重新选择。')
-    const object = objectId ? mode.specificObjects.find(item => item.id === objectId) : undefined
-    if (objectId && !object) throw new Error('对象用户不属于当前模式，请重新选择。')
-    const model = resolveModelConfig(settings, settings.globalReplyModelId)
-    const policy = object ? objectReplyPolicy(mode, object, defaultReplyMode(ensureSystemModes(settings.modes), settings.globalDefaultModeId)) : mode
-    const rules = policy.prompt + (policy.unifiedPrefix ? `\n回复使用统一开头：${policy.unifiedPrefix}` : '') + buildContextSection({objectTitle:object?.title,objectRelation:object?.relationship})
-    const objectScope = object ? { ...learningService.accountScope('generic'), conversationId: `object:${learningHash({ modeId, objectId: object.id })}` } : undefined
-    return new LearningKnowledgeAnswers(service, learningService, () => console.error('[Learning] 案例记录失败，试答仍可使用。')).answer(question, rules, async (system, input) => {
-      if(!model.apiKey) throw new Error('请先在模型配置中添加回复模型，并在主页选择该模型。')
-      const client = new AIClient({apiKey:model.apiKey,model:model.modelName,baseURL:model.baseURL})
-      try { return await client.getTextReply(system,input) }
-      catch { throw new Error('模型调用失败，请先测试模型连接，或稍后重试。') }
-    }, objectScope)
-  })
-  foregroundWechat = registerForegroundWechatIpc(join(__dirname, '../renderer/index.html'), app.getPath('userData'), target => {
-    const settings = normalizeSettings(settingsStore.store)
-    const modes = ensureSystemModes(settings.modes)
-    const common = defaultReplyMode(modes, settings.globalDefaultModeId)
-    const matches = modes.flatMap(owner => owner.specificObjects.filter(object => object.name === target).map(object => ({ owner, object })))
-    if (matches.length > 1) throw new Error('target_rules_ambiguous')
-    const match = matches[0]
-    const policy = match ? objectReplyPolicy(match.owner, match.object, common) : common
-    if (!policy) throw new Error('rules_not_configured')
-    if (match?.object.autoReply === false) throw new Error('target_auto_reply_disabled')
-    const rules = policy.prompt + (policy.unifiedPrefix ? `\n回复使用统一开头：${policy.unifiedPrefix}` : '') + buildContextSection({ objectTitle: match?.object.title, objectRelation: match?.object.relationship })
-    const vision = resolveModelConfig(settings, settings.globalVisionModelId)
-    const reply = resolveModelConfig(settings, settings.globalReplyModelId)
-    return { vision, reply, rules, revision: learningHash({ vision, reply, rules, knowledge: knowledgeStore.version() }), knowledge: question => {
-      if (!knowledgeStore.settings().enabled || !knowledgeStore.snapshot().documents.length) return { instructions: '' }
-      const { hits } = knowledgeStore.search(question)
-      const fallback = knowledgeStore.settings().fallbackReply
-      return hits.length ? { instructions: knowledgeInstructions(hits, fallback) } : { instructions: '', fallback }
-    } }
-  }, is.dev ? process.env.ELECTRON_RENDERER_URL : undefined)
-  powerMonitor.on('suspend', () => { void reliableRuntime?.pause('suspended'); void foregroundWechat?.pause() })
-  powerMonitor.on('lock-screen', () => { void reliableRuntime?.pause('locked'); void foregroundWechat?.pause() })
 
   const initialSettings = normalizeSettings(settingsStore.store)
   nativeTheme.themeSource = initialSettings.theme === 'light' ? 'light' : 'dark'
-
-  const modelDir = sentimentModelDir()
-  try {
-    mkdirSync(modelDir, { recursive: true })
-    console.log(`[Main] 情感分析模型目录已创建: ${modelDir}`)
-  } catch (err: unknown) {
-    console.error(`[Main] 创建模型目录失败: ${errorMessage(err)}`)
-  }
 
   // 检查和请求 macOS 需要的权限
   await checkAndRequestPermissions()
@@ -669,7 +829,6 @@ app.whenReady().then(async () => {
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
-
 
   // ── Settings 持久化 ──
   legacyIpc.handle('settings:getAll', async () => {
@@ -704,11 +863,21 @@ app.whenReady().then(async () => {
         ...(data.capture || {})
       },
       models: Array.isArray(data.models) ? data.models : current.models,
-      globalVisionModelId: typeof data.globalVisionModelId === 'string' ? data.globalVisionModelId : current.globalVisionModelId,
-      globalReplyModelId: typeof data.globalReplyModelId === 'string' ? data.globalReplyModelId : current.globalReplyModelId,
+      globalVisionModelId:
+        typeof data.globalVisionModelId === 'string'
+          ? data.globalVisionModelId
+          : current.globalVisionModelId,
+      globalReplyModelId:
+        typeof data.globalReplyModelId === 'string'
+          ? data.globalReplyModelId
+          : current.globalReplyModelId,
       modes: Array.isArray(data.modes) ? data.modes : current.modes,
-      globalDefaultModeId: typeof data.globalDefaultModeId === 'string' ? data.globalDefaultModeId : current.globalDefaultModeId,
-      globalAutoReply: typeof data.globalAutoReply === 'boolean' ? data.globalAutoReply : current.globalAutoReply,
+      globalDefaultModeId:
+        typeof data.globalDefaultModeId === 'string'
+          ? data.globalDefaultModeId
+          : current.globalDefaultModeId,
+      globalAutoReply:
+        typeof data.globalAutoReply === 'boolean' ? data.globalAutoReply : current.globalAutoReply,
       theme: data.theme === 'light' || data.theme === 'dark' ? data.theme : current.theme
     } satisfies AppSettings
 
@@ -724,7 +893,6 @@ app.whenReady().then(async () => {
 
   legacyIpc.handle('engine:exitStandby', async (_event, modeId: string) => {
     if (typeof modeId !== 'string' || !modeId) return { success: false }
-    systemSession?.forceExitStandby(modeId)
     return { success: true }
   })
 
@@ -732,7 +900,6 @@ app.whenReady().then(async () => {
     if (typeof modeId !== 'string' || !modeId) return { success: false }
     const value = userInput || ''
     modeUserInputCache.set(modeId, value)
-    systemSession?.updateModeUserInput(modeId, value)
     return { success: true }
   })
 
@@ -870,10 +1037,12 @@ app.whenReady().then(async () => {
     const updated = { ...settings.models[index] }
     if (name) updated.name = name
     if (typeof input?.provider === 'string') updated.provider = input.provider
-    if (typeof input?.modelName === 'string' && input.modelName.trim()) updated.modelName = input.modelName.trim()
+    if (typeof input?.modelName === 'string' && input.modelName.trim())
+      updated.modelName = input.modelName.trim()
     if (typeof input?.apiKey === 'string') updated.apiKey = input.apiKey
     if (typeof input?.baseURL === 'string') updated.baseURL = input.baseURL
-    if (Array.isArray(input?.capabilities)) updated.capabilities = input.capabilities.filter((c) => typeof c === 'string')
+    if (Array.isArray(input?.capabilities))
+      updated.capabilities = input.capabilities.filter((c) => typeof c === 'string')
 
     const nextModels = [...settings.models]
     nextModels[index] = updated
@@ -903,20 +1072,29 @@ app.whenReady().then(async () => {
 
   legacyIpc.handle('model:testConnection', async (_event, input: string | Partial<ModelConfig>) => {
     // Draft tests use the submitted fields without creating or updating a saved model.
-    const model = typeof input === 'string'
-      ? normalizeSettings(settingsStore.store).models.find((m) => m.id === input)
-      : input && typeof input === 'object' ? input : undefined
+    const model =
+      typeof input === 'string'
+        ? normalizeSettings(settingsStore.store).models.find((m) => m.id === input)
+        : input && typeof input === 'object'
+          ? input
+          : undefined
     if (!model) return { success: false, error: '模型不存在或配置无效' }
     const modelName = typeof model.modelName === 'string' ? model.modelName.trim() : ''
     const apiKey = typeof model.apiKey === 'string' ? model.apiKey.trim() : ''
     if (!modelName) return { success: false, error: '模型标识不能为空' }
     if (!apiKey) return { success: false, error: 'API Key 不能为空' }
     const providerPreset = PROVIDER_PRESETS.find((p) => p.id === model.provider)
-    const baseURL = (typeof model.baseURL === 'string' ? model.baseURL.trim() : '') || providerPreset?.defaultBaseURL || FIXED_ARK_BASE_URL
+    const baseURL =
+      (typeof model.baseURL === 'string' ? model.baseURL.trim() : '') ||
+      providerPreset?.defaultBaseURL ||
+      FIXED_ARK_BASE_URL
     try {
       if (!['http:', 'https:'].includes(new URL(baseURL).protocol)) throw new Error('invalid_url')
     } catch {
-      return { success: false, error: 'Base URL 格式不正确，请填写完整的 http:// 或 https:// 地址。' }
+      return {
+        success: false,
+        error: 'Base URL 格式不正确，请填写完整的 http:// 或 https:// 地址。'
+      }
     }
     const client = new AIClient({
       apiKey,
@@ -980,7 +1158,8 @@ app.whenReady().then(async () => {
     const updated = { ...allModes[index], updatedAt: Date.now() }
     if (name) updated.name = name
     if (typeof input?.prompt === 'string') updated.prompt = input.prompt
-    if (typeof input?.sentimentEnabled === 'boolean') updated.sentimentEnabled = input.sentimentEnabled
+    if (typeof input?.sentimentEnabled === 'boolean')
+      updated.sentimentEnabled = input.sentimentEnabled
     if (typeof input?.unifiedPrefix === 'string') updated.unifiedPrefix = input.unifiedPrefix
     if (typeof input?.enabled === 'boolean') updated.enabled = input.enabled
     if (typeof input?.autoReply === 'boolean') updated.autoReply = input.autoReply
@@ -1031,14 +1210,15 @@ app.whenReady().then(async () => {
 
   legacyIpc.handle('mode:stop', async (_event, modeId: string) => {
     if (typeof modeId !== 'string' || !modeId) return { success: false, error: '无效的模式 ID' }
-    const result = await pauseAllReplyRuntimes(reliableRuntime, () => stopEngineCore('mode_stop', modeId))
+    const result = await pauseAllReplyRuntimes(reliableRuntime, () =>
+      stopEngineCore('mode_stop', modeId)
+    )
     if (result.ok) return { success: true }
     return { success: false, error: result.message || result.reason }
   })
 
   legacyIpc.handle('mode:setAutoReply', async (_event, modeId: string, autoReply: boolean) => {
     if (typeof modeId !== 'string' || !modeId) return { success: false, error: '无效的模式 ID' }
-    systemSession?.updateModeAutoReply(modeId, autoReply)
     const settings = normalizeSettings(settingsStore.store)
     const allModes = ensureSystemModes(settings.modes)
     const mode = allModes.find((m) => m.id === modeId)
@@ -1050,37 +1230,45 @@ app.whenReady().then(async () => {
   })
 
   // ── 特定对象 CRUD ──
-  legacyIpc.handle('object:create', async (_event, modeId: string, input: Partial<SpecificObject>) => {
-    if (typeof modeId !== 'string' || !modeId) return { success: false, error: '无效的模式 ID' }
-    const objName = typeof input?.name === 'string' ? input.name.trim() : ''
-    if (!objName) return { success: false, error: '对象名称不能为空' }
+  legacyIpc.handle(
+    'object:create',
+    async (_event, modeId: string, input: Partial<SpecificObject>) => {
+      if (typeof modeId !== 'string' || !modeId) return { success: false, error: '无效的模式 ID' }
+      const objName = typeof input?.name === 'string' ? input.name.trim() : ''
+      if (!objName) return { success: false, error: '对象名称不能为空' }
 
-    const settings = normalizeSettings(settingsStore.store)
-    const allModes = ensureSystemModes(settings.modes)
-    const allObjects = allModes.flatMap((m) => m.specificObjects || [])
-    const duplicate = allObjects.find((o) => o.name === objName)
-    if (duplicate) return { success: false, error: `该对象名称已存在于[${allModes.find((m) => m.specificObjects?.some((o) => o.id === duplicate.id))?.name || '未知'}]模式中` }
+      const settings = normalizeSettings(settingsStore.store)
+      const allModes = ensureSystemModes(settings.modes)
+      const allObjects = allModes.flatMap((m) => m.specificObjects || [])
+      const duplicate = allObjects.find((o) => o.name === objName)
+      if (duplicate)
+        return {
+          success: false,
+          error: `该对象名称已存在于[${allModes.find((m) => m.specificObjects?.some((o) => o.id === duplicate.id))?.name || '未知'}]模式中`
+        }
 
-    const targetModeId = typeof input?.modeId === 'string' && input.modeId ? input.modeId : modeId
-    const targetMode = allModes.find((m) => m.id === targetModeId)
-    if (!targetMode) return { success: false, error: '目标模式不存在' }
+      const targetModeId = typeof input?.modeId === 'string' && input.modeId ? input.modeId : modeId
+      const targetMode = allModes.find((m) => m.id === targetModeId)
+      if (!targetMode) return { success: false, error: '目标模式不存在' }
 
-    const newObject: SpecificObject = {
-      id: randomUUID(),
-      name: objName,
-      title: typeof input?.title === 'string' ? input.title : '',
-      relationship: typeof input?.relationship === 'string' ? input.relationship : '',
-      modeId: targetModeId,
-      replyRules: typeof input?.replyRules === 'string' ? input.replyRules.trim().slice(0, 8000) : '',
-      autoReply: typeof input?.autoReply === 'boolean' ? input.autoReply : null
+      const newObject: SpecificObject = {
+        id: randomUUID(),
+        name: objName,
+        title: typeof input?.title === 'string' ? input.title : '',
+        relationship: typeof input?.relationship === 'string' ? input.relationship : '',
+        modeId: targetModeId,
+        replyRules:
+          typeof input?.replyRules === 'string' ? input.replyRules.trim().slice(0, 8000) : '',
+        autoReply: typeof input?.autoReply === 'boolean' ? input.autoReply : null
+      }
+
+      targetMode.specificObjects = [...(targetMode.specificObjects || []), newObject]
+      targetMode.updatedAt = Date.now()
+
+      persistSettings({ ...settings, modes: allModes })
+      return { success: true, object: newObject, modeId: targetModeId }
     }
-
-    targetMode.specificObjects = [...(targetMode.specificObjects || []), newObject]
-    targetMode.updatedAt = Date.now()
-
-    persistSettings({ ...settings, modes: allModes })
-    return { success: true, object: newObject, modeId: targetModeId }
-  })
+  )
 
   legacyIpc.handle('object:delete', async (_event, modeId: string, objectId: string) => {
     if (typeof modeId !== 'string' || !modeId) return { success: false, error: '无效的模式 ID' }
@@ -1100,42 +1288,48 @@ app.whenReady().then(async () => {
     return { success: true }
   })
 
-  legacyIpc.handle('object:update', async (_event, modeId: string, objectId: string, patch: Partial<SpecificObject>) => {
-    if (typeof modeId !== 'string' || !modeId) return { success: false, error: '无效的模式 ID' }
-    if (typeof objectId !== 'string' || !objectId) return { success: false, error: '无效的对象 ID' }
-    const settings = normalizeSettings(settingsStore.store)
-    const allModes = ensureSystemModes(settings.modes)
-    const mode = allModes.find((m) => m.id === modeId)
-    if (!mode) return { success: false, error: '模式不存在' }
+  legacyIpc.handle(
+    'object:update',
+    async (_event, modeId: string, objectId: string, patch: Partial<SpecificObject>) => {
+      if (typeof modeId !== 'string' || !modeId) return { success: false, error: '无效的模式 ID' }
+      if (typeof objectId !== 'string' || !objectId)
+        return { success: false, error: '无效的对象 ID' }
+      const settings = normalizeSettings(settingsStore.store)
+      const allModes = ensureSystemModes(settings.modes)
+      const mode = allModes.find((m) => m.id === modeId)
+      if (!mode) return { success: false, error: '模式不存在' }
 
-    const obj = (mode.specificObjects || []).find((o) => o.id === objectId)
-    if (!obj) return { success: false, error: '对象不存在' }
-    const targetModeId = typeof patch?.modeId === 'string' && patch.modeId ? patch.modeId : modeId
-    const targetMode = allModes.find((m) => m.id === targetModeId)
-    if (!targetMode) return { success: false, error: '目标模式不存在' }
+      const obj = (mode.specificObjects || []).find((o) => o.id === objectId)
+      if (!obj) return { success: false, error: '对象不存在' }
+      const targetModeId = typeof patch?.modeId === 'string' && patch.modeId ? patch.modeId : modeId
+      const targetMode = allModes.find((m) => m.id === targetModeId)
+      if (!targetMode) return { success: false, error: '目标模式不存在' }
 
-    if (typeof patch?.name === 'string' && patch.name.trim()) {
-      const allObjects = allModes.flatMap((m) => m.specificObjects || [])
-      const duplicate = allObjects.find((o) => o.name === patch.name!.trim() && o.id !== objectId)
-      if (duplicate) return { success: false, error: '该对象名称已存在' }
-      obj.name = patch.name.trim()
+      if (typeof patch?.name === 'string' && patch.name.trim()) {
+        const allObjects = allModes.flatMap((m) => m.specificObjects || [])
+        const duplicate = allObjects.find((o) => o.name === patch.name!.trim() && o.id !== objectId)
+        if (duplicate) return { success: false, error: '该对象名称已存在' }
+        obj.name = patch.name.trim()
+      }
+      if (typeof patch?.title === 'string') obj.title = patch.title
+      if (typeof patch?.relationship === 'string') obj.relationship = patch.relationship
+      if (typeof patch?.replyRules === 'string')
+        obj.replyRules = patch.replyRules.trim().slice(0, 8000)
+      if (typeof patch?.autoReply === 'boolean' || patch?.autoReply === null)
+        obj.autoReply = patch.autoReply
+
+      if (targetModeId !== modeId) {
+        mode.specificObjects = (mode.specificObjects || []).filter((o) => o.id !== objectId)
+        obj.modeId = targetModeId
+        targetMode.specificObjects = [...(targetMode.specificObjects || []), obj]
+        targetMode.updatedAt = Date.now()
+      }
+
+      mode.updatedAt = Date.now()
+      persistSettings({ ...settings, modes: allModes })
+      return { success: true, object: obj, modeId: targetModeId }
     }
-    if (typeof patch?.title === 'string') obj.title = patch.title
-    if (typeof patch?.relationship === 'string') obj.relationship = patch.relationship
-    if (typeof patch?.replyRules === 'string') obj.replyRules = patch.replyRules.trim().slice(0, 8000)
-    if (typeof patch?.autoReply === 'boolean' || patch?.autoReply === null) obj.autoReply = patch.autoReply
-
-    if (targetModeId !== modeId) {
-      mode.specificObjects = (mode.specificObjects || []).filter((o) => o.id !== objectId)
-      obj.modeId = targetModeId
-      targetMode.specificObjects = [...(targetMode.specificObjects || []), obj]
-      targetMode.updatedAt = Date.now()
-    }
-
-    mode.updatedAt = Date.now()
-    persistSettings({ ...settings, modes: allModes })
-    return { success: true, object: obj, modeId: targetModeId }
-  })
+  )
 
   legacyIpc.handle('reply:paste', async (_event, text: string) => {
     if (typeof text !== 'string' || !text) return { success: false, error: '文本为空' }
@@ -1146,7 +1340,10 @@ app.whenReady().then(async () => {
 
   legacyIpc.handle('reply:send', async (_event, text: string) => {
     if (typeof text !== 'string' || !text) return { success: false, error: '文本为空' }
-    return { success: false, error: '该发送入口未绑定客户和审核任务，已关闭。请使用完成身份核验的任务发送入口。' }
+    return {
+      success: false,
+      error: '该发送入口未绑定客户和审核任务，已关闭。请使用完成身份核验的任务发送入口。'
+    }
   })
 
   legacyIpc.handle('memory:open', async () => {
@@ -1255,33 +1452,25 @@ app.whenReady().then(async () => {
   })
 
   legacyIpc.handle('engine:stop', async (_event, reason?: string) => {
-    const result = await pauseAllReplyRuntimes(reliableRuntime, () => stopEngineCore(typeof reason === 'string' ? reason : 'ipc_stop'))
+    const result = await pauseAllReplyRuntimes(reliableRuntime, () =>
+      stopEngineCore(typeof reason === 'string' ? reason : 'ipc_stop')
+    )
     if (result.ok) return { success: true }
     return { success: false, error: result.message || result.reason }
   })
 
-  legacyIpc.handle('engine:status', async () => {
-    const runningModes: string[] = []
-    for (const [modeId, rt] of runtimeInstances) {
-      if (rt.isRunning()) runningModes.push(modeId)
-    }
-    return { running: runningModes.length > 0 || reliableRuntime?.status().state === 'running', runningModes }
-  })
-
-  legacyIpc.handle('engine:updateConfig', async (_event, config) => {
-    const settings = normalizeSettings(config || settingsStore.store)
-    if (runtimeDevice) {
-      const visionModel = resolveModelConfig(settings, settings.globalVisionModelId)
-      runtimeDevice.setApiKey(visionModel.apiKey, visionModel.modelName, visionModel.baseURL)
-      runtimeDevice.setAppType(settings.appType)
-    }
-    if (runtimeInstances.size > 0) {
-      for (const rt of runtimeInstances.values()) {
-        rt.updateAppType(settings.appType)
-      }
-    }
-    return { success: true }
-  })
+  legacyIpc.handle('engine:status', async () => ({
+    running:
+      reliableRuntime?.status().state === 'running' ||
+      Boolean(
+        foregroundWechat && !['idle', 'paused'].includes(foregroundWechat.runtime.status().state)
+      ) ||
+      Boolean(
+        foregroundWechat && !['idle', 'paused'].includes(foregroundWechat.batch.status().state)
+      ),
+    runningModes: []
+  }))
+  legacyIpc.handle('engine:updateConfig', async () => ({ success: true }))
 
   legacyIpc.handle('engine:testConnection', async (_event, config) => {
     const currentSettings = normalizeSettings(settingsStore.store)
@@ -1294,129 +1483,6 @@ app.whenReady().then(async () => {
       baseURL
     })
     return client.testConnection()
-  })
-
-  // ── 模型训练 IPC ──
-
-  legacyIpc.handle('train:start', async () => {
-    if (trainingProcess) {
-      return { ok: false, error: '训练正在进行中' }
-    }
-
-    const userDataPath = app.getPath('userData')
-    const scriptDir = ensureScriptsCopied(app.getAppPath(), userDataPath)
-
-    try {
-      await ensurePythonDeps(scriptDir, userDataPath)
-    } catch (err: unknown) {
-      return { ok: false, error: errorMessage(err) || 'Python 依赖安装失败' }
-    }
-
-    const pythonCheck = checkPythonInstalled()
-    if (!pythonCheck.installed || !pythonCheck.path) {
-      return { ok: false, error: pythonCheck.error || '未检测到 Python 环境' }
-    }
-
-    const sendTrainEvent = (data: unknown): void => {
-      for (const win of BrowserWindow.getAllWindows()) {
-        if (!win.isDestroyed()) {
-          win.webContents.send('train:event', data)
-        }
-      }
-    }
-
-    const libsDir = join(userDataPath, 'sentpredict-libs')
-    const systemRoot = process.env.SystemRoot || process.env.SYSTEMROOT || 'C:\\WINDOWS'
-    const trainEnv: Record<string, string> = {
-      ...process.env as Record<string, string>,
-      SystemRoot: systemRoot,
-      SYSTEMROOT: systemRoot,
-      PATH: [join(systemRoot, 'system32'), join(systemRoot, 'System32', 'Wbem'), systemRoot, process.env.PATH || ''].join(';'),
-      HF_ENDPOINT: 'https://hf-mirror.com',
-      PYTHONIOENCODING: 'utf-8',
-      PYTHONUTF8: '1',
-      SENTIMENT_MODEL_DIR: sentimentModelDir(),
-      PYTHONPATH: libsDir
-    }
-
-    console.log('[Train] 正在启动训练进程...')
-    console.log(`[Train] Python 路径: ${pythonCheck.path}`)
-    console.log(`[Train] 脚本目录: ${scriptDir}`)
-    console.log(`[Train] 模型保存目录: ${sentimentModelDir()}`)
-    console.log('[Train] ⚠ 训练过程耗时较长（约数小时），请耐心等待。训练进度将在下方日志中实时显示。')
-    sendTrainEvent({
-      type: 'hint',
-      message: '⚠ 训练过程耗时较长（约数小时），请耐心等待。训练进度将在下方日志中实时显示。'
-    })
-    trainingProcess = spawnChild(pythonCheck.path, ['train_server.py'], {
-      cwd: scriptDir,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: trainEnv
-    })
-
-    let buffer = ''
-
-    trainingProcess.stdout?.on('data', (data: Buffer) => {
-      buffer += data.toString()
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed) continue
-        try {
-          const parsed: unknown = JSON.parse(trimmed)
-          if (parsed === null) continue
-          const message = typeof parsed === 'object' && 'message' in parsed ? parsed.message : undefined
-          console.log('[Train]', message || JSON.stringify(parsed))
-          sendTrainEvent(parsed)
-        } catch {
-          // Training also emits plain progress lines; only JSON lines are forwarded.
-        }
-      }
-    })
-
-    trainingProcess.stderr?.on('data', (data: Buffer) => {
-      const msg = data.toString().trim()
-      if (msg) {
-        console.error('[Train] Python stderr:', msg)
-        sendTrainEvent({
-          type: 'stderr',
-          message: msg
-        })
-      }
-    })
-
-    trainingProcess.on('error', (err) => {
-      console.error('[Train] 进程异常:', err.message)
-      sendTrainEvent({ type: 'error', message: err.message })
-      trainingProcess = null
-    })
-
-    trainingProcess.on('exit', (code) => {
-      console.log(`[Train] 进程退出 (code: ${code})`)
-      sendTrainEvent({
-        type: 'exited',
-        code,
-        message: code === 0 ? '训练进程已结束' : `训练进程异常退出 (code: ${code})`
-      })
-      trainingProcess = null
-    })
-
-    return { ok: true }
-  })
-
-  legacyIpc.handle('train:stop', async () => {
-    if (!trainingProcess) {
-      return { ok: false, error: '没有正在进行的训练' }
-    }
-    trainingProcess.kill()
-    trainingProcess = null
-    return { ok: true }
-  })
-
-  legacyIpc.handle('train:status', async () => {
-    return { running: trainingProcess !== null }
   })
 
   // ── Capture / 框选向导 IPC ──
@@ -1471,10 +1537,10 @@ app.whenReady().then(async () => {
     return { success: true }
   })
 
-
   // ── Skill HTTP Server（OpenClaw 远程启动 / 暂停接入点） ──
   // Remote legacy control is opt-in until authentication and the reliable executor are integrated.
-  if (process.env.AUTOREPLY_ENABLE_LEGACY_SKILL_SERVER === '1') startSkillServer(skillEngineController)
+  if (process.env.AUTOREPLY_ENABLE_LEGACY_SKILL_SERVER === '1')
+    startSkillServer(skillEngineController)
 
   createWindow()
 
@@ -1497,341 +1563,39 @@ app.on('window-all-closed', () => {
 app.on('before-quit', (event) => {
   learningService?.stop()
   stopSkillServer()
-  if ((reliableRuntime || foregroundWechat || learningService || adminConnection) && !reliableQuitRequested) {
+  if (
+    (reliableRuntime || foregroundWechat || learningService || adminConnection) &&
+    !reliableQuitRequested
+  ) {
     event.preventDefault()
     reliableQuitRequested = true
     // Unknown in-flight actions remain durable for restart reconciliation.
-    void Promise.allSettled([reliableRuntime?.close(), foregroundWechat?.close(), learningService?.shutdown(), adminConnection?.close()]).then(() => app.quit())
+    void (async () => {
+      await advancedInitialization?.catch(() => undefined)
+      await Promise.allSettled([
+        reliableRuntime?.close(),
+        foregroundWechat?.close(),
+        learningService?.shutdown(),
+        adminConnection?.close()
+      ])
+      app.quit()
+    })()
   }
 })
 app.on('will-quit', () => {
   hostModelAudit?.close()
   learningService?.store.close()
 })
-
-// ── 引擎启动 / 暂停核心逻辑（IPC 与 Skill HTTP Server 共用） ──
-
-async function startEngineCore(rawConfig?: LegacySettingsInput, modeId?: string): Promise<SkillStartResult> {
-  const effectiveModeId = modeId || 'default'
-  if (runtimeInstances.has(effectiveModeId) && runtimeInstances.get(effectiveModeId)!.isRunning()) {
-    return { ok: false, reason: 'already_running', message: '该模式引擎已在运行中' }
-  }
-
-  try {
-    const settings = normalizeSettings(rawConfig || settingsStore.store)
-    const appType: AppType = settings.appType || 'wechat'
-    if (process.platform === 'win32') {
-      return { ok: false, reason: 'capability_unverified', message: '旧桌面引擎未绑定账号和审核任务，请使用通过平台核验的员工工作台。' }
-    }
-    const startupStrategy = resolveSettingsStrategy(appType, settings)
-
-    const visionModel = resolveModelConfig(settings, settings.globalVisionModelId)
-    const replyModel = resolveModelConfig(settings, settings.globalReplyModelId)
-
-    const providerNeedsVisionKey =
-      !settings.chatProvider.installed ||
-      settings.chatProvider.installed.id === BUILTIN_DOUBAO_PROVIDER_ID
-    const needsVisionKey = startupStrategy === 'vlm' || providerNeedsVisionKey
-
-    if (needsVisionKey && !visionModel.apiKey) {
-      return { ok: false, reason: 'no_vision_key', message: '请先填写视觉接口密钥' }
-    }
-
-    let provider
-    if (!settings.chatProvider.installed) {
-      const loaded = await loadBuiltinDoubaoProvider({
-        ...settings.chatProvider.config,
-        apiKey: replyModel.apiKey || visionModel.apiKey,
-        model: replyModel.modelName || settings.chatProvider.config?.model,
-        baseURL: replyModel.baseURL || settings.chatProvider.config?.baseURL
-      })
-      provider = loaded.provider
-    } else {
-      const installedManifest = await getInstalledProviderManifest(settings.chatProvider.installed)
-      const isDoubao = settings.chatProvider.installed.id === BUILTIN_DOUBAO_PROVIDER_ID
-      const required = (installedManifest?.configSchema?.required || []).filter(
-        (key) => !(isDoubao && key === 'apiKey')
-      )
-      const missing = required.find((key) => {
-        const value = settings.chatProvider.config?.[key]
-        return value === undefined || value === null || value === ''
-      })
-      if (missing) {
-        return {
-          ok: false,
-          reason: 'missing_required_field',
-          message: `缺少必填配置: ${missing}`
-        }
-      }
-
-      const effectiveConfig = isDoubao
-        ? { ...settings.chatProvider.config, apiKey: replyModel.apiKey || visionModel.apiKey, model: replyModel.modelName || settings.chatProvider.config?.model, baseURL: replyModel.baseURL || settings.chatProvider.config?.baseURL }
-        : settings.chatProvider.config
-
-      const loaded = await loadInstalledProvider(settings.chatProvider.installed, effectiveConfig)
-      provider = loaded.provider
-    }
-
-    const mainWindow = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed()) ?? null
-    const modeLog = (type: 'thinking' | 'reply' | 'skip' | 'error', content: string): void => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('engine:log', { type, content, modeId: effectiveModeId })
-      }
-    }
-    const systemLog = (type: 'thinking' | 'reply' | 'skip' | 'error', content: string): void => {
-      for (const win of BrowserWindow.getAllWindows()) {
-        if (!win.isDestroyed()) {
-          for (const mid of systemSession?.getRunningModeIds() ?? [effectiveModeId]) {
-            win.webContents.send('engine:log', { type, content, modeId: mid })
-          }
-        }
-      }
-    }
-
-    const allModes = ensureSystemModes(settings.modes)
-    const targetMode = allModes.find((m) => m.id === effectiveModeId)
-    if (!targetMode) {
-      return { ok: false, reason: 'mode_not_found', message: '未找到指定模式' }
-    }
-
-    if (systemSession && systemRuntime && systemRuntime.isRunning()) {
-      const runningIds = systemSession.getRunningModeIds()
-      const defaultModeId = settings.globalDefaultModeId
-      const defaultMode = allModes.find((m) => m.id === defaultModeId)
-      const defaultModeName = defaultMode?.name || defaultModeId
-      if (defaultModeId && !runningIds.includes(defaultModeId) && effectiveModeId !== defaultModeId) {
-        return {
-          ok: false,
-          reason: 'default_mode_not_running',
-          message: `请先启动默认模式"${defaultModeName}"，或前往设置中修改全局默认模式`
-        }
-      }
-    }
-
-    const modeHandler: ModeHandler = {
-      modeId: effectiveModeId,
-      modeName: targetMode.name,
-      prompt: targetMode.prompt,
-      autoReply: targetMode.autoReply,
-      sentimentEnabled: targetMode.sentimentEnabled,
-      unifiedPrefix: targetMode.unifiedPrefix,
-      replyModelHasVision: (replyModel.capabilities || []).includes('vision'),
-      userInput: modeUserInputCache.get(effectiveModeId) || '',
-      objectRelation: '',
-      objectTitle: '',
-      onRecommendReply: (text: string, learningGenerationId?: string) => {
-        for (const win of BrowserWindow.getAllWindows()) {
-          if (!win.isDestroyed()) {
-            win.webContents.send('engine:recommendReply', { text, modeId: effectiveModeId, learningGenerationId })
-          }
-        }
-      },
-      onLog: modeLog,
-      onStandbyChange: (standby: boolean) => {
-        for (const win of BrowserWindow.getAllWindows()) {
-          if (!win.isDestroyed()) {
-            win.webContents.send('engine:standbyChanged', { modeId: effectiveModeId, standby })
-          }
-        }
-      },
-      onPendingChange: (pending: boolean) => {
-        for (const win of BrowserWindow.getAllWindows()) {
-          if (!win.isDestroyed()) {
-            win.webContents.send('engine:pendingChanged', { modeId: effectiveModeId, pending })
-          }
-        }
-      }
-    }
-
-    if (systemSession && systemRuntime && systemRuntime.isRunning()) {
-      systemSession.registerModeHandler(modeHandler)
-      systemSession.forceExitStandby(effectiveModeId)
-      runtimeInstances.set(effectiveModeId, systemRuntime)
-      notifyModeRunningChanged(effectiveModeId, true)
-      return { ok: true }
-    }
-
-    let device: DesktopDevice
-    let strategy: CaptureStrategy
-    try {
-      const built = await buildDevice(appType, settings, visionModel.apiKey, modeLog, visionModel.modelName, visionModel.baseURL)
-      device = built.device
-      strategy = built.strategy
-    } catch (err: unknown) {
-      const message = errorMessage(err)
-      if (message === 'user_cancelled_box_select_wizard') {
-        return { ok: false, reason: 'wizard_cancelled', message: '已取消框选，引擎未启动' }
-      }
-      throw err
-    }
-    modeLog('thinking', `已选用抓取策略：${strategy}`)
-    runtimeDevice = device
-
-    const recorder = getTraceRecorder()
-    const configuredModel = settings.chatProvider.config?.model
-    recorder.startSession({
-      appType,
-      engineVersion: app.getVersion(),
-      providerId: settings.chatProvider.installed?.id ?? BUILTIN_DOUBAO_PROVIDER_ID,
-      model: replyModel.modelName || (typeof configuredModel === 'string' ? configuredModel : '') || visionModel.modelName
-    })
-
-    const onTrace = (input: TraceStepInput): void => {
-      const step = recorder.record(input)
-      if (!step) return
-
-
-      for (const win of BrowserWindow.getAllWindows()) {
-        if (!win.isDestroyed()) {
-          win.webContents.send('trace:step', { sessionId: step.sessionId, step })
-        }
-      }
-    }
-
-    const channel = new GenericChannelSession(device)
-    channel.registerModeHandler(modeHandler)
-
-    let extractChatTextFn: ((screenshot: string) => Promise<string>) | undefined
-    let classifySentimentFn: ((text: string) => Promise<import('../core/sentiment/types').SentimentResult>) | undefined
-
-    const anyModeNeedsSentiment = Array.from(channel['modeHandlers'].values()).some(h => h.sentimentEnabled)
-    const anyModeNeedsText = Array.from(channel['modeHandlers'].values()).some(h => !h.replyModelHasVision)
-
-    if (anyModeNeedsSentiment || anyModeNeedsText) {
-      try {
-        const textExtractClient = new AIClient({
-          apiKey: visionModel.apiKey,
-          model: visionModel.modelName,
-          baseURL: visionModel.baseURL
-        })
-
-        extractChatTextFn = (screenshot) => textExtractClient.extractChatText(screenshot)
-
-        if (anyModeNeedsSentiment) {
-          sentimentClassifier = new SentimentClassifier()
-          const scriptDir = ensureScriptsCopied(app.getAppPath(), app.getPath('userData'))
-          await sentimentClassifier.start(
-            scriptDir,
-            sentimentModelDir(),
-            app.getPath('userData')
-          )
-
-          classifySentimentFn = (text) => sentimentClassifier!.classify(text)
-
-          modeLog('thinking', '情感分析模块已就绪 ✓')
-        }
-
-        if (anyModeNeedsText && !anyModeNeedsSentiment) {
-          modeLog('thinking', '回复模型不支持视觉，已启用文本提取模式')
-        }
-      } catch (error: unknown) {
-        console.error('[Main] 文本提取/情感分析模块启动失败:', errorMessage(error))
-        console.error('[Main] 完整错误堆栈:', errorStack(error))
-        modeLog('thinking', `文本提取/情感分析模块启动失败: ${errorMessage(error)}`)
-        sentimentClassifier = null
-      }
-    } else {
-      modeLog('thinking', '当前模式未启用情感分析，已跳过')
-    }
-
-    const runtime = new RuntimeHost({
-      appType,
-      channel,
-      provider: new KnowledgeProvider(new MemoryProvider(provider, learningService.store, input => learningService.resolveScope(input), {
-        fallbackScope: learningService.accountScope(appType), activity: learningService,
-        extract: screenshot => new AIClient({apiKey:visionModel.apiKey,model:visionModel.modelName,baseURL:visionModel.baseURL}).extractChatText(screenshot),
-        onLoaded: (_input, context) => onTrace({ phase: 'think', summary: `加载 ${context.snapshot.items.length} 条相关工作记忆、${context.episodeIds.length} 个案例`,
-          reasoning: { content: '按当前场景检索；加载不等于采用。', memoryLoads: context.snapshot.items.map(item => ({ id: item.id, revision: item.revision })) } }),
-        onDraft: (input, context, draft) => { learningService.onDraft(input, context, draft) },
-        onLearningError: () => modeLog('error', '工作记忆检索或案例记录失败，学习状态请在工作记忆中检查。')
-      }), knowledgeStore, screenshot => new AIClient({apiKey:visionModel.apiKey,model:visionModel.modelName,baseURL:visionModel.baseURL}).extractChatText(screenshot)),
-      initialState: createInitialSystemChannelState(),
-      onLog: systemLog,
-      onTrace,
-      isLearningReplyCurrent: snapshot => learningService.store.snapshotCurrent(snapshot),
-      onSessionEnd: () => {
-        recorder.endSession()
-        for (const modeId of channel.getRunningModeIds()) {
-          runtimeInstances.delete(modeId)
-          notifyModeRunningChanged(modeId, false)
-        }
-        notifyEngineStateChanged('idle')
-      },
-      extractChatText: extractChatTextFn,
-      classifySentiment: classifySentimentFn,
-      getAutoReply: () => {
-        const current = normalizeSettings(settingsStore.store)
-        return current.globalAutoReply
-      },
-      onRecommendReply: () => {},
-      identifyContact: async (screenshot: string) => {
-        try {
-          const textClient = new AIClient({
-            apiKey: visionModel.apiKey,
-            model: visionModel.modelName,
-            baseURL: visionModel.baseURL
-          })
-          return await textClient.detectContactName(screenshot)
-        } catch {
-          return ''
-        }
-      },
-      resolveMode: (contactName: string) => {
-        const current = normalizeSettings(settingsStore.store)
-        const allModes = ensureSystemModes(current.modes)
-        const enabledModes = allModes.filter((m) => m.enabled)
-        for (const mode of enabledModes) {
-          const obj = mode.specificObjects.find((o) => o.name === contactName)
-          if (obj) {
-            const policy = objectReplyPolicy(mode, obj, defaultReplyMode(allModes, current.globalDefaultModeId))
-            return {
-              modeId: mode.id,
-              modeName: mode.name,
-              prompt: policy.prompt,
-              autoReply: obj.autoReply !== null ? obj.autoReply : policy.autoReply,
-              sentimentEnabled: policy.sentimentEnabled,
-              unifiedPrefix: policy.unifiedPrefix,
-              objectRelation: obj.relationship || '',
-              objectTitle: obj.title || ''
-            }
-          }
-        }
-        const defaultMode = allModes.find((m) => m.id === current.globalDefaultModeId && m.enabled)
-        if (defaultMode) {
-          return {
-            modeId: defaultMode.id,
-            modeName: defaultMode.name,
-            prompt: defaultMode.prompt,
-            autoReply: defaultMode.autoReply,
-            sentimentEnabled: defaultMode.sentimentEnabled,
-            unifiedPrefix: defaultMode.unifiedPrefix,
-            objectRelation: '',
-            objectTitle: ''
-          }
-        }
-        return null
-      },
-      onStandbyChange: () => {}
-    })
-
-    systemSession = channel
-    systemRuntime = runtime
-    runtimeInstances.set(effectiveModeId, runtime)
-
-    runtime.startSession().catch((err: unknown) => {
-      console.error('[Main] Runtime session error:', err)
-    })
-
-    notifyEngineStateChanged('running')
-    notifyModeRunningChanged(effectiveModeId, true)
-
-    return { ok: true }
-  } catch (error: unknown) {
-    return {
-      ok: false,
-      reason: 'engine_failed',
-      message: errorMessage(error)
-    }
+async function startEngineCore(
+  _rawSettings?: unknown,
+  _modeId?: string
+): Promise<SkillStartResult> {
+  void _rawSettings
+  void _modeId
+  return {
+    ok: false,
+    reason: 'capability_unverified',
+    message: '请使用主页的个人微信自动回复入口；企业模式请在企业连接页同步规则后启动。'
   }
 }
 
@@ -1858,85 +1622,10 @@ function resolveModelConfig(
     capabilities: ['text', 'vision']
   }
 }
-
-async function stopEngineCore(stopReason: string, modeId?: string): Promise<SkillPauseResult> {
-  if (modeId) {
-    if (!systemSession || !systemRuntime) {
-      return { ok: false, reason: 'not_running', message: '引擎未运行' }
-    }
-    if (!systemSession.isModeRunning(modeId)) {
-      return { ok: false, reason: 'not_running', message: '该模式引擎未运行' }
-    }
-
-    systemSession.unregisterModeHandler(modeId)
-    runtimeInstances.delete(modeId)
-
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) {
-        win.webContents.send('engine:standbyChanged', { modeId, standby: false })
-        win.webContents.send('engine:pendingChanged', { modeId, pending: false })
-      }
-    }
-
-    if (systemSession.getRunningModeIds().length === 0) {
-      try {
-        await systemRuntime.stopSession(stopReason)
-      } catch {
-        // ignore
-      }
-      systemSession = null
-      systemRuntime = null
-      const settings = normalizeSettings(settingsStore.store)
-      const [{ clearLayoutCache }, { clearChatBaseline }] = await Promise.all([
-        import('../core/rpa/vision-utils'), import('../core/rpa/image-compare')
-      ])
-      clearLayoutCache(settings.appType)
-      clearChatBaseline()
-      if (sentimentClassifier) {
-        sentimentClassifier.stop()
-        sentimentClassifier = null
-      }
-      notifyEngineStateChanged('idle')
-    }
-
-    notifyModeRunningChanged(modeId, false)
-    return { ok: true }
-  }
-
-  if (!systemRuntime) {
-    return { ok: false, reason: 'not_running', message: '引擎未运行' }
-  }
-
-  const runningModeIds = systemSession?.getRunningModeIds() ?? []
-  try {
-    await systemRuntime.stopSession(stopReason)
-  } catch {
-    // ignore
-  }
-
-  for (const id of runningModeIds) {
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) {
-        win.webContents.send('engine:standbyChanged', { modeId: id, standby: false })
-        win.webContents.send('engine:pendingChanged', { modeId: id, pending: false })
-      }
-    }
-    notifyModeRunningChanged(id, false)
-  }
-
-  runtimeInstances.clear()
-  systemSession = null
-  systemRuntime = null
-  const settings = normalizeSettings(settingsStore.store)
-  const [{ clearLayoutCache }, { clearChatBaseline }] = await Promise.all([
-    import('../core/rpa/vision-utils'), import('../core/rpa/image-compare')
-  ])
-  clearLayoutCache(settings.appType)
-  clearChatBaseline()
-  if (sentimentClassifier) {
-    sentimentClassifier.stop()
-    sentimentClassifier = null
-  }
+async function stopEngineCore(_reason = 'user_stop', _modeId?: string): Promise<SkillPauseResult> {
+  void _reason
+  void _modeId
+  await foregroundWechat?.pause()
   notifyEngineStateChanged('idle')
   return { ok: true }
 }
@@ -1950,14 +1639,6 @@ function notifyEngineStateChanged(status: 'running' | 'idle'): void {
   }
 }
 
-function notifyModeRunningChanged(modeId: string, running: boolean): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) {
-      win.webContents.send('mode:runningChanged', { modeId, running })
-    }
-  }
-}
-
 /** 通知 Renderer：某个 appType 的框选区域被向导/重置更新了，UI 上的 chip 立即重渲染。 */
 function notifyCaptureRegionsUpdated(appType: AppType, regions: BoxRegions | null): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -1967,89 +1648,14 @@ function notifyCaptureRegionsUpdated(appType: AppType, regions: BoxRegions | nul
   }
 }
 
-/**
- * 选取实际生效的 capture strategy。
- * 用户在 settings 里给 appType 显式设置过策略，就用它；否则用全局默认；
- * 全局默认是 'auto' 时，wechat/wework 优先 VLM，其它直接 box-select。
- */
-function resolveEffectiveStrategy(
-  appType: AppType,
-  perAppStrategy: CaptureStrategy,
-  defaultStrategy: CaptureStrategy
-): CaptureStrategy {
-  const effective = perAppStrategy === 'auto' ? defaultStrategy : perAppStrategy
-  if (effective === 'auto') {
-    return isWechatLike(appType) ? 'vlm' : 'box-select'
-  }
-  return effective
-}
-
-function resolveSettingsStrategy(appType: AppType, settings: AppSettings): CaptureStrategy {
-  const perApp = settings.capture[appType] ?? { strategy: 'auto' as CaptureStrategy, regions: null }
-  return resolveEffectiveStrategy(appType, perApp.strategy, settings.defaultCaptureStrategy)
-}
-
-/**
- * 把 capture 配置 + strategy 解析成具体设备实例。
- * VLM 和 box-select 只决定"如何测量 LayoutCache"，后续运行统一消费 LayoutCache。
- * 本轮不做 VLM 失败自动 fallback；VLM 测量失败由 session bootstrap 报错停止。
- */
-async function buildDevice(
-  appType: AppType,
-  settings: AppSettings,
-  apiKey: string,
-  log: (type: 'thinking' | 'reply' | 'skip' | 'error', content: string) => void,
-  modelName?: string,
-  baseURL?: string
-): Promise<{ device: DesktopDevice; strategy: CaptureStrategy }> {
-  const perApp = settings.capture[appType] ?? { strategy: 'auto' as CaptureStrategy, regions: null }
-  const effective = resolveSettingsStrategy(appType, settings)
-
-  if (effective === 'vlm') {
-    const { RPADevice } = await import('../core/rpa-device')
-    const rpa = new RPADevice()
-    rpa.setAppType(appType)
-    rpa.setApiKey(apiKey, modelName, baseURL)
-    return { device: rpa, strategy: 'vlm' }
-  }
-
-  // box-select 路线：缺区域则拉向导
-  let regions = perApp.regions
-  if (!regions) {
-    log('thinking', `首次配置 ${appType}：请框选 3 个关键区域`)
-    const wizardResult = await runBoxSelectWizard({ appType, prefill: null })
-    if (!wizardResult.ok || !wizardResult.regions) {
-      throw new Error('user_cancelled_box_select_wizard')
-    }
-    regions = wizardResult.regions
-    persistRegionsAndStickyStrategy(appType, regions, perApp.strategy)
-  }
-  const { BoxSelectDevice } = await import('../core/box-select-device')
-  return { device: new BoxSelectDevice(regions), strategy: 'box-select' }
-}
-
-/** 把向导产出的 regions 写回 settings，并保留当前策略配置。 */
-function persistRegionsAndStickyStrategy(
-  appType: AppType,
-  regions: BoxRegions,
-  strategy: CaptureStrategy
-): void {
-  const current = normalizeSettings(settingsStore.store)
-  const next: AppSettings = {
-    ...current,
-    capture: {
-      ...current.capture,
-      [appType]: { strategy, regions }
-    }
-  }
-  persistSettings(next)
-  notifyCaptureRegionsUpdated(appType, regions)
-}
-
 const skillEngineController: SkillEngineController = {
   start: () => startEngineCore(),
   pause: () => pauseAllReplyRuntimes(reliableRuntime, () => stopEngineCore('skill_pause')),
-  isRunning: () => runtimeInstances.size > 0 || reliableRuntime?.status().state === 'running'
+  isRunning: () =>
+    reliableRuntime?.status().state === 'running' ||
+    Boolean(
+      foregroundWechat && !['idle', 'paused'].includes(foregroundWechat.runtime.status().state)
+    )
 }
 
 // In this file you can include the rest of your app's specific main process
@@ -2162,36 +1768,45 @@ function normalizeSettings(raw: LegacySettingsInput | null | undefined): AppSett
     defaultCaptureStrategy: coerceStrategy(raw?.defaultCaptureStrategy, 'auto'),
     capture: normalizeCapture(raw?.capture),
     models,
-    globalVisionModelId: typeof raw?.globalVisionModelId === 'string' ? raw.globalVisionModelId : '',
+    globalVisionModelId:
+      typeof raw?.globalVisionModelId === 'string' ? raw.globalVisionModelId : '',
     globalReplyModelId: typeof raw?.globalReplyModelId === 'string' ? raw.globalReplyModelId : '',
     modes: normalizeModes(raw?.modes),
-    globalDefaultModeId: typeof raw?.globalDefaultModeId === 'string' ? raw.globalDefaultModeId : '',
+    globalDefaultModeId:
+      typeof raw?.globalDefaultModeId === 'string' ? raw.globalDefaultModeId : '',
     globalAutoReply: !!raw?.globalAutoReply
   }
 }
 
-function normalizeModels(raw: ModelConfig[] | undefined, fallbackVision: { apiKey: string; model: string; baseURL: string }): ModelConfig[] {
+function normalizeModels(
+  raw: ModelConfig[] | undefined,
+  fallbackVision: { apiKey: string; model: string; baseURL: string }
+): ModelConfig[] {
   if (Array.isArray(raw)) {
     const valid = raw.filter((m) => m && typeof m === 'object' && typeof m.id === 'string' && m.id)
     if (valid.length > 0) {
-      return valid.map((m): ModelConfig => ({
-        ...m,
-        capabilities: Array.isArray(m.capabilities) ? m.capabilities : ['text']
-      }))
+      return valid.map(
+        (m): ModelConfig => ({
+          ...m,
+          capabilities: Array.isArray(m.capabilities) ? m.capabilities : ['text']
+        })
+      )
     }
   }
 
   if (fallbackVision.apiKey) {
-    return [{
-      id: 'default-vision',
-      name: '默认视觉模型',
-      provider: 'volcengine-ark',
-      modelName: fallbackVision.model,
-      apiKey: fallbackVision.apiKey,
-      baseURL: fallbackVision.baseURL,
-      capabilities: ['text', 'vision'],
-      createdAt: Date.now()
-    }]
+    return [
+      {
+        id: 'default-vision',
+        name: '默认视觉模型',
+        provider: 'volcengine-ark',
+        modelName: fallbackVision.model,
+        apiKey: fallbackVision.apiKey,
+        baseURL: fallbackVision.baseURL,
+        capabilities: ['text', 'vision'],
+        createdAt: Date.now()
+      }
+    ]
   }
 
   return []
@@ -2209,8 +1824,9 @@ function ensureSystemModes(customModes: ReplyMode[]): ReplyMode[] {
       id: 'system-depression',
       name: '抑郁预测',
       source: 'system',
-      prompt: '你是一个善于识别抑郁倾向并提供温暖关怀的回复助手。请根据对话内容判断对方是否有抑郁倾向，并给出温暖、关怀、鼓励性的回复。如果对方表现出明显的抑郁倾向，请在回复中适当表达关心。',
-      sentimentEnabled: true,
+      prompt:
+        '你是一个善于识别抑郁倾向并提供温暖关怀的回复助手。请根据对话内容判断对方是否有抑郁倾向，并给出温暖、关怀、鼓励性的回复。如果对方表现出明显的抑郁倾向，请在回复中适当表达关心。',
+      sentimentEnabled: false,
       unifiedPrefix: '',
       enabled: false,
       running: false,
@@ -2356,7 +1972,9 @@ function ensureSystemModes(customModes: ReplyMode[]): ReplyMode[] {
   ]
 
   const custom = Array.isArray(customModes)
-    ? customModes.filter((m) => m && typeof m === 'object' && typeof m.id === 'string' && !isSystemModeId(m.id))
+    ? customModes.filter(
+        (m) => m && typeof m === 'object' && typeof m.id === 'string' && !isSystemModeId(m.id)
+      )
     : []
 
   const persistedSystem = Array.isArray(customModes)
@@ -2371,10 +1989,17 @@ function ensureSystemModes(customModes: ReplyMode[]): ReplyMode[] {
         enabled: typeof persisted.enabled === 'boolean' ? persisted.enabled : base.enabled,
         specificObjects: Array.isArray(persisted.specificObjects) ? persisted.specificObjects : [],
         autoReply: typeof persisted.autoReply === 'boolean' ? persisted.autoReply : base.autoReply,
-        unifiedPrefix: typeof persisted.unifiedPrefix === 'string' ? persisted.unifiedPrefix : base.unifiedPrefix,
-        prompt: typeof persisted.prompt === 'string' && persisted.prompt ? persisted.prompt : base.prompt,
+        unifiedPrefix:
+          typeof persisted.unifiedPrefix === 'string'
+            ? persisted.unifiedPrefix
+            : base.unifiedPrefix,
+        prompt:
+          typeof persisted.prompt === 'string' && persisted.prompt ? persisted.prompt : base.prompt,
         name: typeof persisted.name === 'string' && persisted.name ? persisted.name : base.name,
-        sentimentEnabled: typeof persisted.sentimentEnabled === 'boolean' ? persisted.sentimentEnabled : base.sentimentEnabled
+        sentimentEnabled:
+          typeof persisted.sentimentEnabled === 'boolean'
+            ? persisted.sentimentEnabled
+            : base.sentimentEnabled
       }
     }
     return base

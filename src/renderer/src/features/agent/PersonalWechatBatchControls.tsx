@@ -38,9 +38,9 @@ const reason = (value: string): string =>
   reasons[value] ?? '读取或校验失败，请检查微信窗口、模型配置和回复规则。'
 const savedTargets = (): string => {
   try {
-    return localStorage.getItem('personal-wechat-batch-targets')?.slice(0, 64500) || 'Q'
+    return localStorage.getItem('personal-wechat-batch-targets')?.slice(0, 64500) || ''
   } catch {
-    return 'Q'
+    return ''
   }
 }
 export default function PersonalWechatBatchControls({

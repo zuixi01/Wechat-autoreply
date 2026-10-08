@@ -132,7 +132,8 @@ async function file(name: string, body: unknown = createInputFixture()): Promise
   return path
 }
 async function command(
-  args: string[]
+  args: string[],
+  deadlineMs = 4000
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((done, reject) => {
     const release = process.env.JEV_SETTLEMENT_COMPILED_RELEASE
@@ -157,7 +158,7 @@ async function command(
       timedOut = true
       profile('command_timer_fired')
       child.kill()
-    }, 4000)
+    }, deadlineMs)
     child.stdout.on('data', (chunk) => {
       if (!stdout) profile('command_stdout_first')
       stdout += chunk.toString()
@@ -255,7 +256,9 @@ describe('actual offline settlement CLI with private synthetic inputs', () => {
       input = await file('complete.private.json', data)
     const original = await readFile(input),
       output = join(directory, 'complete', 'summary.private.json')
-    const execution = await command([input, output])
+    // The full 900-case fixture starts a cold TypeScript process and checks
+    // Windows ACLs. Keep its deadline separate from the small rejection cases.
+    const execution = await command([input, output], 10000)
     expect(execution.code).toBe(2)
     expect(execution.stderr).toBe('')
     expect(execution.stdout).toContain('No models called or messages sent.')
@@ -278,7 +281,7 @@ describe('actual offline settlement CLI with private synthetic inputs', () => {
     profile('input_bytes_compare_start')
     expect(reread.equals(original)).toBe(true)
     profile('input_bytes_compare_end')
-  })
+  }, 15000)
   it('keeps a missing target settlement unknown with exit 2 and no zero substitution', async () => {
     const data = createSyntheticJevSettlementInput()
     const artifact = data.artifacts.find((a) => a.runId === data.holdout.runId && a.arm === 'C')!

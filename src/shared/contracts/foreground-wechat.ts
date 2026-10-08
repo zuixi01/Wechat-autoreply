@@ -27,6 +27,11 @@ export const ForegroundCheckpointSchema = z.strictObject({
   pending: z.boolean()
 })
 export type ForegroundCheckpoint = z.infer<typeof ForegroundCheckpointSchema>
+export const ForegroundResolutionSchema = z.strictObject({
+  id: z.string().uuid(),
+  state: z.enum(['sent', 'not_sent']),
+  verifiedInWechat: z.literal(true)
+})
 export const ForegroundStatusSchema = z.strictObject({
   state: z.enum([
     'idle',
@@ -46,7 +51,8 @@ export const ForegroundStartSchema = z
     target: z.string().trim().min(1).max(128),
     foregroundConsent: z.literal(true),
     connectionMode: z.enum(['search', 'current_chat']).optional(),
-    currentChatSelected: z.literal(true).optional()
+    currentChatSelected: z.literal(true).optional(),
+    resetBaseline: z.boolean().optional()
   })
   .refine(
     (input) => input.connectionMode !== 'current_chat' || input.currentChatSelected === true,
@@ -60,6 +66,7 @@ export interface ForegroundDesktopApi {
   status(): Promise<ForegroundStatus>
   start(input: z.infer<typeof ForegroundStartSchema>): Promise<ForegroundStatus>
   pause(): Promise<ForegroundStatus>
+  resolve(input: z.infer<typeof ForegroundResolutionSchema>): Promise<ForegroundStatus>
   batchStatus(): Promise<BatchStatus>
   batchStart(input: {
     targets: string[]

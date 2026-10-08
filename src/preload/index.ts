@@ -13,44 +13,53 @@ import {
 import { assertLegacyChannel } from './legacy-channels'
 import type { AdminDesktopApi } from '../shared/contracts/admin-gateway'
 
+let advancedReady: Promise<void> | undefined
+async function invokeAdvanced(
+  channel: string,
+  ...args: unknown[]
+): ReturnType<typeof ipcRenderer.invoke> {
+  await (advancedReady ??= ipcRenderer.invoke('features:advanced-enable'))
+  return ipcRenderer.invoke(channel, ...args)
+}
+
 const adminHandler: AdminDesktopApi = {
-  status: () => ipcRenderer.invoke('admin:status'),
-  connect: (input) => ipcRenderer.invoke('admin:connect', input),
-  disconnect: () => ipcRenderer.invoke('admin:disconnect'),
-  runtime: (input) => ipcRenderer.invoke('admin:runtime', input),
-  pauseAll: (input) => ipcRenderer.invoke('admin:pause-all', input),
-  pauseSummary: (input) => ipcRenderer.invoke('admin:pause-summary', input),
-  pauseAccounts: (input) => ipcRenderer.invoke('admin:pause-accounts', input)
+  status: () => invokeAdvanced('admin:status'),
+  connect: (input) => invokeAdvanced('admin:connect', input),
+  disconnect: () => invokeAdvanced('admin:disconnect'),
+  runtime: (input) => invokeAdvanced('admin:runtime', input),
+  pauseAll: (input) => invokeAdvanced('admin:pause-all', input),
+  pauseSummary: (input) => invokeAdvanced('admin:pause-summary', input),
+  pauseAccounts: (input) => invokeAdvanced('admin:pause-accounts', input)
 }
 
 const runtimeHandler: RuntimeDesktopApi = {
-  status: () => ipcRenderer.invoke('agent-runtime:status'),
-  synchronize: () => ipcRenderer.invoke('agent-runtime:synchronize'),
-  start: () => ipcRenderer.invoke('agent-runtime:start'),
-  pause: () => ipcRenderer.invoke('agent-runtime:pause')
+  status: () => invokeAdvanced('agent-runtime:status'),
+  synchronize: () => invokeAdvanced('agent-runtime:synchronize'),
+  start: () => invokeAdvanced('agent-runtime:start'),
+  pause: () => invokeAdvanced('agent-runtime:pause')
 }
 const restorationHandler: RestorationDesktopApi = {
-  status: () => ipcRenderer.invoke('agent-restoration:status', {}),
-  submitPause: () => ipcRenderer.invoke('agent-restoration:submit-pause', {}),
-  submitInventory: () => ipcRenderer.invoke('agent-restoration:submit-inventory', {}),
-  applyDecision: () => ipcRenderer.invoke('agent-restoration:apply-decision', {})
+  status: () => invokeAdvanced('agent-restoration:status', {}),
+  submitPause: () => invokeAdvanced('agent-restoration:submit-pause', {}),
+  submitInventory: () => invokeAdvanced('agent-restoration:submit-inventory', {}),
+  applyDecision: () => invokeAdvanced('agent-restoration:apply-decision', {})
 }
 const workbenchHandler: WorkbenchDesktopApi = {
-  presentationTicket: (input) => ipcRenderer.invoke('agent-workbench:presentation-ticket', input),
-  presentationAck: (input) => ipcRenderer.invoke('agent-workbench:presentation-ack', input),
-  learn: (input) => ipcRenderer.invoke('agent-workbench:learn', input),
-  snapshot: () => ipcRenderer.invoke('agent-workbench:snapshot'),
-  act: (input) => ipcRenderer.invoke('agent-workbench:act', input),
-  reviewEdited: (input) => ipcRenderer.invoke('agent-workbench:review-edited', input),
-  confirmSend: (input) => ipcRenderer.invoke('agent-workbench:confirm-send', input),
-  evidence: (input) => ipcRenderer.invoke('agent-workbench:evidence', input),
-  reconcile: (input) => ipcRenderer.invoke('agent-workbench:reconcile', input)
+  presentationTicket: (input) => invokeAdvanced('agent-workbench:presentation-ticket', input),
+  presentationAck: (input) => invokeAdvanced('agent-workbench:presentation-ack', input),
+  learn: (input) => invokeAdvanced('agent-workbench:learn', input),
+  snapshot: () => invokeAdvanced('agent-workbench:snapshot'),
+  act: (input) => invokeAdvanced('agent-workbench:act', input),
+  reviewEdited: (input) => invokeAdvanced('agent-workbench:review-edited', input),
+  confirmSend: (input) => invokeAdvanced('agent-workbench:confirm-send', input),
+  evidence: (input) => invokeAdvanced('agent-workbench:evidence', input),
+  reconcile: (input) => invokeAdvanced('agent-workbench:reconcile', input)
 }
 
 const agentHandler: AgentDesktopApi = {
-  status: () => ipcRenderer.invoke('agent:status'),
-  refresh: () => ipcRenderer.invoke('agent:refresh'),
-  register: (input: RegistrationInput) => ipcRenderer.invoke('agent:register', input)
+  status: () => invokeAdvanced('agent:status'),
+  refresh: () => invokeAdvanced('agent:refresh'),
+  register: (input: RegistrationInput) => invokeAdvanced('agent:register', input)
 }
 
 const knowledgeHandler: KnowledgeDesktopApi = {
@@ -66,37 +75,35 @@ const knowledgeHandler: KnowledgeDesktopApi = {
   export: () => ipcRenderer.invoke('knowledge:export')
 }
 const learningSubmissionHandler: LearningSubmissionDesktopApi = {
-  submit: (input) => ipcRenderer.invoke('learning-submission:submit', input),
+  submit: (input) => invokeAdvanced('learning-submission:submit', input),
   submissions: async (input) =>
     parseLearningSubmissionReadResponse(
-      await ipcRenderer.invoke('learning-submission:receipts', input)
+      await invokeAdvanced('learning-submission:receipts', input)
     ),
   readSubmissions: async (input) =>
-    parseLearningSubmissionReadResult(
-      await ipcRenderer.invoke('learning-submission:receipts', input)
-    )
+    parseLearningSubmissionReadResult(await invokeAdvanced('learning-submission:receipts', input))
 }
 const learningHandler: LearningMemoryDesktopApi = {
-  episode: (input) => ipcRenderer.invoke('learning:episode', input),
-  modelDirectory: (input) => ipcRenderer.invoke('learning:model-directory', input),
-  calibration: (input) => ipcRenderer.invoke('learning:calibration', input),
-  importCalibration: (input) => ipcRenderer.invoke('learning:import-calibration', input),
-  validate: (input) => ipcRenderer.invoke('learning:validate', input),
-  curate: (input) => ipcRenderer.invoke('learning:curate', input),
-  searchEpisodes: (input) => ipcRenderer.invoke('learning:search', input),
-  reports: (input) => ipcRenderer.invoke('learning:reports', input),
-  snapshot: (input) => ipcRenderer.invoke('learning:snapshot', input),
-  detail: (input) => ipcRenderer.invoke('learning:detail', input),
-  settings: (input) => ipcRenderer.invoke('learning:settings', input),
-  act: (input) => ipcRenderer.invoke('learning:act', input),
-  correct: (input) => ipcRenderer.invoke('learning:correct', input),
-  confirmResult: (input) => ipcRenderer.invoke('learning:result', input),
-  feedback: (input) => ipcRenderer.invoke('learning:feedback', input),
-  review: (input) => ipcRenderer.invoke('learning:review', input),
-  cancel: (input) => ipcRenderer.invoke('learning:cancel', input),
-  forgetScope: (input) => ipcRenderer.invoke('learning:forget-scope', input),
-  manual: (input) => ipcRenderer.invoke('learning:manual', input),
-  assignLegacy: (input) => ipcRenderer.invoke('learning:assign-legacy', input)
+  episode: (input) => invokeAdvanced('learning:episode', input),
+  modelDirectory: (input) => invokeAdvanced('learning:model-directory', input),
+  calibration: (input) => invokeAdvanced('learning:calibration', input),
+  importCalibration: (input) => invokeAdvanced('learning:import-calibration', input),
+  validate: (input) => invokeAdvanced('learning:validate', input),
+  curate: (input) => invokeAdvanced('learning:curate', input),
+  searchEpisodes: (input) => invokeAdvanced('learning:search', input),
+  reports: (input) => invokeAdvanced('learning:reports', input),
+  snapshot: (input) => invokeAdvanced('learning:snapshot', input),
+  detail: (input) => invokeAdvanced('learning:detail', input),
+  settings: (input) => invokeAdvanced('learning:settings', input),
+  act: (input) => invokeAdvanced('learning:act', input),
+  correct: (input) => invokeAdvanced('learning:correct', input),
+  confirmResult: (input) => invokeAdvanced('learning:result', input),
+  feedback: (input) => invokeAdvanced('learning:feedback', input),
+  review: (input) => invokeAdvanced('learning:review', input),
+  cancel: (input) => invokeAdvanced('learning:cancel', input),
+  forgetScope: (input) => invokeAdvanced('learning:forget-scope', input),
+  manual: (input) => invokeAdvanced('learning:manual', input),
+  assignLegacy: (input) => invokeAdvanced('learning:assign-legacy', input)
 }
 
 const electronHandler = {
@@ -138,6 +145,7 @@ if (process.contextIsolated) {
       status: () => ipcRenderer.invoke('foreground-wechat:status'),
       start: (input: unknown) => ipcRenderer.invoke('foreground-wechat:start', input),
       pause: () => ipcRenderer.invoke('foreground-wechat:pause'),
+      resolve: (input: unknown) => ipcRenderer.invoke('foreground-wechat:resolve', input),
       batchStatus: () => ipcRenderer.invoke('foreground-wechat:batch-status'),
       batchStart: (input: unknown) => ipcRenderer.invoke('foreground-wechat:batch-start', input),
       batchPause: () => ipcRenderer.invoke('foreground-wechat:batch-pause')

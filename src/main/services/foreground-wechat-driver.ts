@@ -197,7 +197,12 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     jsonOutput = false
   ): Promise<string> {
     if (!model.apiKey || !model.modelName) throw new Error('model_not_configured')
-    const url = new URL(model.baseURL.replace(/\/$/, '') + '/chat/completions')
+    let url: URL
+    try {
+      url = new URL(model.baseURL.replace(/\/$/, '') + '/chat/completions')
+    } catch {
+      throw new Error('model_endpoint_invalid')
+    }
     if (
       url.protocol !== 'https:' &&
       !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
@@ -306,6 +311,19 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     if (focus) {
       await this.windows.focus(window, signal)
       await wait(400, signal)
+      // Windows may decline programmatic activation after the user answers in
+      // another app. Give the user time to return; inspect only, never force
+      // focus again or interact with a background window during this wait.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await this.current(signal)
+          break
+        } catch (error) {
+          if (!(error instanceof Error) || error.message !== 'foreground_lost' || attempt >= 120)
+            throw error
+          await wait(250, signal)
+        }
+      }
     }
     // Human selected the chat before this explicit UI action. Runtime validates
     // its title, private-chat type and empty draft before establishing a baseline.
@@ -329,7 +347,7 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     if (!robot) throw new Error('desktop_input_unavailable')
     await this.current(signal)
     robot.keyTap('a', ['control'])
-    robot.typeString(target)
+    await this.windows.typeText(await this.current(signal), target, signal)
     await wait(800, signal)
     const searchCapture = await this.capture(signal)
     const matches = SearchSchema.parse(
@@ -596,17 +614,33 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     const robot = getRobot()
     if (!robot) return 'not_sent'
     let dispatchStarted = false
+    let stage = 'before_input'
     try {
-      const fresh = await this.capture(signal)
+      let fresh = await this.capture(signal)
+      for (
+        let attempt = 0;
+        attempt < 12 &&
+        fresh.token === observation.windowToken &&
+        this.fingerprint(fresh.pixels, evidence.visual) !== evidence.fingerprint;
+        attempt++
+      ) {
+        // A blinking caret may alternate during the model request. Wait only
+        // for the EXACT original pixels; never mask or relax a changed draft.
+        await wait(100, signal)
+        fresh = await this.capture(signal)
+      }
       if (
         fresh.token !== observation.windowToken ||
         this.fingerprint(fresh.pixels, evidence.visual) !== evidence.fingerprint
-      )
+      ) {
+        console.warn('[ForegroundWechat] send_guard:before_input_pixels_changed')
         return 'not_sent'
+      }
       const [x, y, w, h] = evidence.visual.input
       await this.click(fresh, [x + w * 0.3, y + h * 0.4], signal)
       await this.current(signal)
-      robot.typeString(text)
+      await this.windows.typeText(await this.current(signal), text, signal)
+      stage = 'draft_validation'
       await wait(250, signal)
       const typed = await this.read(signal)
       if (
@@ -616,22 +650,49 @@ export class ForegroundWechatDriver implements ForegroundDriver {
         typed.inputText !== text ||
         hashContext(typed.messages) !== hashContext(observation.messages) ||
         typed.revision !== observation.revision
-      )
+      ) {
+        console.warn(
+          '[ForegroundWechat] send_guard:draft_changed',
+          JSON.stringify({
+            window: typed.windowToken === observation.windowToken,
+            contact: typed.contact === this.target,
+            privateChat: typed.privateChat,
+            draft: typed.inputText === text,
+            draftCharacters: typed.inputText.length,
+            expectedCharacters: text.length,
+            history: hashContext(typed.messages) === hashContext(observation.messages),
+            revision: typed.revision === observation.revision
+          })
+        )
         return 'not_sent'
+      }
       const ready = this.evidence!
-      const immediate = await this.current(signal)
-      if (hashContext(immediate) !== observation.windowToken) return 'not_sent'
-      // No await between this last screen check and the send action.
-      if (
-        this.fingerprint(this.screenPixels(ready.capture.bounds), ready.visual) !==
-        ready.fingerprint
-      )
+      stage = 'before_enter'
+      for (let attempt = 0; attempt < 13; attempt++) {
+        const immediate = await this.current(signal)
+        if (hashContext(immediate) !== observation.windowToken) return 'not_sent'
+        // No await between a successful last screen check and Enter. Transient
+        // animation may settle, while any persistent change still blocks send.
+        if (
+          this.fingerprint(this.screenPixels(ready.capture.bounds), ready.visual) ===
+          ready.fingerprint
+        ) {
+          if (signal.aborted || this.configuration().revision !== observation.revision)
+            return 'not_sent'
+          dispatchStarted = true
+          robot.keyTap('enter')
+          break
+        }
+        if (attempt < 12) await wait(100, signal)
+      }
+      if (!dispatchStarted) {
+        console.warn('[ForegroundWechat] send_guard:before_enter_pixels_changed')
         return 'not_sent'
-      if (signal.aborted || this.configuration().revision !== observation.revision)
-        return 'not_sent'
-      dispatchStarted = true
-      robot.keyTap('enter')
-    } catch {
+      }
+    } catch (error) {
+      const code =
+        error instanceof Error && /^[a-z_]+$/.test(error.message) ? error.message : 'input_failed'
+      console.warn(`[ForegroundWechat] send_guard:${stage}:${code}`)
       return dispatchStarted ? 'unknown' : 'not_sent'
     }
     // A send key is never a success receipt. No alternate shortcut or resend is attempted.

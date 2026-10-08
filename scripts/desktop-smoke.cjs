@@ -227,6 +227,11 @@ app.on('browser-window-created', (_event, window) => {
       }
       if (!publishedProviderLoaded || providerInitializationRequests !== 0)
         return fail('published_provider_initialization_failed')
+      if (
+        existsSync(join(directory, 'agent', 'ledger.sqlite')) ||
+        existsSync(join(directory, 'worktrace', 'memory', 'learning.sqlite'))
+      )
+        return fail('advanced_services_started_before_use')
       const dto = JSON.parse(
         await window.webContents.executeJavaScript(`(async () => {
         const legacySettings = await window.electron.invoke('settings:getAll');
@@ -234,6 +239,7 @@ app.on('browser-window-created', (_event, window) => {
         const rejectedProviderInstall = await window.electron.invoke('provider:installFromUrl', '');
         const legacyStart = await window.electron.invoke('engine:start', {appType:'generic'});
         const legacySend = await window.electron.invoke('reply:send', 'synthetic-unsent');
+        if((await window.foregroundWechat.status()).state!=='idle')throw new Error('personal_startup_not_idle');
         const legacyStop = await window.electron.invoke('engine:stop');
         const device = await window.agentDesktop.status();
         const initial = await window.agentRuntime.status();
@@ -276,7 +282,8 @@ app.on('browser-window-created', (_event, window) => {
         dto.legacyStop.success !== true ||
         dto.device.state !== 'unregistered' ||
         dto.initial.state !== 'paused' ||
-        dto.foregroundInitial.state !== 'idle' ||
+        dto.foregroundInitial.state !== 'paused' ||
+        dto.foregroundInitial.reason !== 'user_pause' ||
         dto.foregroundInitial.records.length !== 0 ||
         !dto.foregroundBridgeBlocked ||
         dto.synchronized.reason !== 'not_registered' ||
@@ -322,7 +329,11 @@ app.on('browser-window-created', (_event, window) => {
         const section=document.querySelector('[aria-labelledby="personal-wechat-heading"]');
         const button=Array.from(section?.querySelectorAll('button')||[]).find(b=>b.textContent.includes('启动个人微信'));
         if(!input||!button) throw new Error('personal_controls_missing');
-        const targetIsQ=input.value==='Q';
+        const initialTargetBlank=input.value==='';
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'Q');
+        input.dispatchEvent(new Event('input',{bubbles:true}));
+        await new Promise(resolve=>setTimeout(resolve,50));
+        const targetIsQ=input.value==='Q' && initialTargetBlank;
         const currentChatButton=Array.from(section.querySelectorAll('button')).find(b=>b.textContent.includes('接入已打开的聊天'));
         const currentChatAvailable=Boolean(currentChatButton&&!currentChatButton.disabled);
         let missingSelectionRejected=false;
@@ -343,10 +354,16 @@ app.on('browser-window-created', (_event, window) => {
       )
         return fail('personal_controls_failed')
       const personalBatchUi = await window.webContents.executeJavaScript(`(async()=>{
+        Array.from(document.querySelectorAll('details')).find(element=>element.querySelector('summary')?.textContent.includes('多联系人批量')).open=true;
+        const mountDeadline=Date.now()+5000;
+        while(!document.querySelector('#personal-wechat-batch-targets')&&Date.now()<mountDeadline)await new Promise(resolve=>setTimeout(resolve,25));
         const panel=document.querySelector('[aria-labelledby="personal-wechat-batch-heading"]');
         const target=document.getElementById('personal-wechat-batch-targets');
         const button=Array.from(panel?.querySelectorAll('button')||[]).find(value=>value.textContent.includes('启动批量'));
         if(!panel||!target||!button)throw new Error('personal_batch_missing');
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(target,'Q');
+        target.dispatchEvent(new Event('input',{bubbles:true}));
+        await new Promise(resolve=>setTimeout(resolve,50));
         let invalidScopeRejected=false;
         try{await window.foregroundWechat.batchStart({targets:[],foregroundConsent:true,processUnread:true});}catch{invalidScopeRejected=true;}
         const visible=panel.getBoundingClientRect().height>0;

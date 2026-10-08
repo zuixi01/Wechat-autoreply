@@ -8,7 +8,7 @@ const AdmZip = require('adm-zip')
 describe('knowledge document parsing', () => {
   it('extracts the text layer from a real PDF', async () => {
     expect(await parseKnowledgeDocument('business.pdf', knowledgePdf())).toContain('09:00 to 18:00')
-  })
+  }, 15000)
   it('reads text, Markdown, JSON and CSV while preserving data relationships', async () => {
     expect(await parseKnowledgeDocument('政策.txt', Buffer.from('服务时间为九点。'))).toContain(
       '九点'

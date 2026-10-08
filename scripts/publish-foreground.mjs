@@ -5,8 +5,12 @@ import { access } from 'node:fs/promises'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 if (process.platform !== 'win32') throw new Error('foreground_native_requires_windows')
-const dotnet = join(root, '.local', 'toolchain', 'dotnet', 'dotnet.exe')
-await access(dotnet)
+let dotnet = join(root, '.local', 'toolchain', 'dotnet', 'dotnet.exe')
+try {
+  await access(dotnet)
+} catch {
+  dotnet = 'dotnet'
+}
 const child = spawn(
   dotnet,
   [

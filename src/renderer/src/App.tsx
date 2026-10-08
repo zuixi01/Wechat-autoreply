@@ -1,13 +1,5 @@
-import {
-  useState,
-  useCallback,
-  useRef,
-  useEffect,
-  useMemo,
-  createContext,
-  useContext,
-  Fragment
-} from 'react'
+import { translations, I18nContext, useI18n, type Locale } from './localization'
+import { useState, useCallback, useRef, useEffect, useMemo, Fragment } from 'react'
 import logoUrl from './assets/logo.png'
 import logoBlackUrl from './assets/logo_black.png'
 import MemoryWindow from './MemoryWindow'
@@ -21,262 +13,7 @@ import './index.css'
 import './workspace.css'
 import './features/workspace/automation.css'
 
-type Locale = 'zh' | 'en'
-
-const translations: Record<Locale, Record<string, string>> = {
-  zh: {
-    'settings.title': '设置',
-    'settings.base': '基础配置',
-    'settings.model': '模型配置',
-    'settings.training': '模型训练',
-    'settings.agent': '智能体',
-    'settings.mode': '模式管理',
-    'settings.base.desc': '维护桌面端运行所需的基础参数。',
-    'settings.basic': '基础设置',
-    'settings.appearance': '外观',
-    'settings.appearance.dark': '深色主题',
-    'settings.appearance.light': '浅色主题',
-    'settings.language': '语言',
-    'settings.language.zh': '中文',
-    'settings.language.en': 'English',
-    'settings.globalModel': '全局模型选择',
-    'settings.globalModel.hint':
-      '选择用于视觉检测和回复生成的模型。如需添加新模型，请前往"模型配置"页面。',
-    'settings.visionModel': '全局视觉模型',
-    'settings.visionModel.hint': '用于 VLM 布局检测、红点检测、对象识别',
-    'settings.replyModel': '全局回复模型',
-    'settings.replyModel.hint': '用于 AI 回复生成',
-    'settings.selectVisionModel': '请选择视觉模型',
-    'settings.selectReplyModel': '请选择回复模型',
-    'settings.testConnection': '测试连接',
-    'mode.start': '启动',
-    'mode.stop': '停止',
-    'mode.starting': '启动中',
-    'mode.running': '运行中',
-    'mode.stopped': '已停止',
-    'mode.targetApp': '目标应用',
-    'mode.autoReply': '自动回复',
-    'mode.sentiment': '情感分析',
-    'mode.unifiedPrefix': '统一开头',
-    'mode.add': '添加模式',
-    'mode.addTitle': '添加自定义模式',
-    'mode.name': '模式名称',
-    'mode.name.required': '模式名称不能为空',
-    'mode.prompt': '回复规则 (Prompt)',
-    'mode.prompt.required': '回复规则不能为空',
-    'mode.prompt.placeholder': 'AI 回复的引导提示词',
-    'mode.sentiment.hint': '开启后该模式运行时使用情感分析',
-    'mode.unifiedPrefix.hint': '回复内容前自动添加的文字',
-    'mode.unifiedPrefix.placeholder': '例如：【机器客服自动回复】',
-    'object.specific': '特定对象',
-    'object.search': '搜索对象',
-    'object.searchBtn': '搜索',
-    'object.add': '+添加对象',
-    'object.addTitle': '新增对象用户',
-    'object.name': '名称',
-    'object.name.required': '对象名称不能为空',
-    'object.name.hint': '请与聊天客户端中显示的名称保持一致。',
-    'object.name.placeholder': '对方在聊天软件中的名称',
-    'object.title': '称呼',
-    'object.title.label': '特定称呼',
-    'object.title.placeholder': '例如：老张、王总',
-    'object.relationship': '关系',
-    'object.relationship.placeholder': '例如：姐姐、老板',
-    'object.autoReply': '自动回复',
-    'object.autoReply.follow': '沿用通用设置',
-    'object.autoReply.on': '开启',
-    'object.autoReply.off': '关闭',
-    'object.empty': '暂无特定对象',
-    'object.delete': '删除',
-    'object.delete.fail': '删除失败',
-    'object.added': '特定对象已添加',
-    'object.add.fail': '添加失败',
-    'object.editTitle': '编辑对象用户',
-    'object.updated': '对象已更新',
-    'object.update.fail': '更新失败',
-    'log.title': '运行日志',
-    'log.empty': '暂无日志',
-    'log.expand': '展开日志',
-    'log.collapse': '收起日志',
-    'log.type.thinking': '思考',
-    'log.type.reply': '回复',
-    'log.type.skip': '跳过',
-    'log.type.error': '错误',
-    'reply.recommended': '推荐回复',
-    'reply.placeholder': 'AI 生成的推荐回复将显示在这里',
-    'reply.paste': '一键粘贴',
-    'reply.send': '一键回复',
-    'reply.skip': '一键跳过',
-    'reply.skip.toast': '已跳过本次推荐回复',
-    'reply.pending': '待处理',
-    'reply.standby': '待机中',
-    'userInput.title': '用户输入',
-    'userInput.placeholder': '输入你希望 AI 参考的内容，为空则按原逻辑回复',
-    'userInput.clear': '清除',
-    'sidebar.expand': '展开菜单',
-    'sidebar.collapse': '收起菜单',
-    'sidebar.settings': '设置',
-    'sidebar.memory': '工作记忆',
-    'sidebar.empty': '请从左侧选择一个模式，或添加新的自定义模式',
-    'btn.cancel': '取消',
-    'btn.add': '添加',
-    'btn.save': '保存',
-    'toast.configVision': '请先配置视觉模型',
-    'toast.modeStarted': '模式已启动',
-    'toast.modeStartFail': '启动失败',
-    'toast.modeStopped': '模式已停止',
-    'toast.modeStopFail': '停止失败',
-    'toast.modeAdded': '模式已添加',
-    'toast.addFail': '添加失败',
-    'toast.connectionOk': '连接测试成功',
-    'toast.connectionFail': '连接测试失败',
-    'app.wechat': '微信',
-    'app.wework': '企业微信',
-    'app.dingtalk': '钉钉',
-    'app.lark': '飞书 / Lark',
-    'app.slack': 'Slack',
-    'app.telegram': 'Telegram',
-    'app.generic': '其他桌面应用'
-  },
-  en: {
-    'settings.title': 'Settings',
-    'settings.base': 'General',
-    'settings.model': 'Models',
-    'settings.training': 'Training',
-    'settings.agent': 'Agents',
-    'settings.mode': 'Modes',
-    'settings.base.desc': 'Manage basic parameters for the desktop client.',
-    'settings.basic': 'Basic Settings',
-    'settings.appearance': 'Appearance',
-    'settings.appearance.dark': 'Dark Theme',
-    'settings.appearance.light': 'Light Theme',
-    'settings.language': 'Language',
-    'settings.language.zh': '中文',
-    'settings.language.en': 'English',
-    'settings.globalModel': 'Global Model Selection',
-    'settings.globalModel.hint':
-      'Select models for vision detection and reply generation. Add new models in the "Models" page.',
-    'settings.visionModel': 'Global Vision Model',
-    'settings.visionModel.hint': 'For VLM layout detection, unread indicators, object recognition',
-    'settings.replyModel': 'Global Reply Model',
-    'settings.replyModel.hint': 'For AI reply generation',
-    'settings.selectVisionModel': 'Select vision model',
-    'settings.selectReplyModel': 'Select reply model',
-    'settings.testConnection': 'Test Connection',
-    'mode.start': 'Start',
-    'mode.stop': 'Stop',
-    'mode.starting': 'Starting',
-    'mode.running': 'Running',
-    'mode.stopped': 'Stopped',
-    'mode.targetApp': 'Target App',
-    'mode.autoReply': 'Auto Reply',
-    'mode.sentiment': 'Sentiment',
-    'mode.unifiedPrefix': 'Prefix',
-    'mode.add': 'Add Mode',
-    'mode.addTitle': 'Add Custom Mode',
-    'mode.name': 'Mode Name',
-    'mode.name.required': 'Mode name is required',
-    'mode.prompt': 'Reply Rule (Prompt)',
-    'mode.prompt.required': 'Reply rule is required',
-    'mode.prompt.placeholder': 'Prompt for AI reply generation',
-    'mode.sentiment.hint': 'Enable sentiment analysis when this mode is running',
-    'mode.unifiedPrefix.hint': 'Text automatically prepended to replies',
-    'mode.unifiedPrefix.placeholder': 'e.g. [Auto Reply]',
-    'object.specific': 'Specific Objects',
-    'object.search': 'Search objects',
-    'object.searchBtn': 'Search',
-    'object.add': '+ Add Object',
-    'object.addTitle': 'Add Specific Object',
-    'object.name': 'Name',
-    'object.name.required': 'Object name is required',
-    'object.name.hint': 'For VLM matching',
-    'object.name.placeholder': 'Contact name in chat app',
-    'object.title': 'Title',
-    'object.title.label': 'Specific Title',
-    'object.title.placeholder': 'e.g. Boss Zhang',
-    'object.relationship': 'Relationship',
-    'object.relationship.placeholder': 'e.g. Sister, Boss',
-    'object.autoReply': 'Auto Reply',
-    'object.autoReply.follow': 'Follow mode setting',
-    'object.autoReply.on': 'On',
-    'object.autoReply.off': 'Off',
-    'object.empty': 'No specific objects',
-    'object.delete': 'Delete',
-    'object.delete.fail': 'Delete failed',
-    'object.added': 'Object added',
-    'object.add.fail': 'Add failed',
-    'object.editTitle': 'Edit Specific Object',
-    'object.updated': 'Object updated',
-    'object.update.fail': 'Update failed',
-    'log.title': 'Runtime Log',
-    'log.empty': 'No logs yet',
-    'log.expand': 'Expand Log',
-    'log.collapse': 'Collapse Log',
-    'log.type.thinking': 'Think',
-    'log.type.reply': 'Reply',
-    'log.type.skip': 'Skip',
-    'log.type.error': 'Error',
-    'reply.recommended': 'Recommended Reply',
-    'reply.placeholder': 'AI-generated recommended reply will appear here',
-    'reply.paste': 'Paste',
-    'reply.send': 'Send',
-    'reply.skip': 'Skip',
-    'reply.skip.toast': 'Skipped this recommended reply',
-    'reply.pending': 'Pending',
-    'reply.standby': 'Standby',
-    'userInput.title': 'User Input',
-    'userInput.placeholder': 'Enter content for AI to reference; leave empty for default logic',
-    'userInput.clear': 'Clear',
-    'sidebar.expand': 'Expand',
-    'sidebar.collapse': 'Collapse',
-    'sidebar.settings': 'Settings',
-    'sidebar.memory': 'Working Memory',
-    'sidebar.empty': 'Select a mode from the sidebar, or add a new custom mode',
-    'btn.cancel': 'Cancel',
-    'btn.add': 'Add',
-    'btn.save': 'Save',
-    'toast.configVision': 'Please configure a vision model first',
-    'toast.modeStarted': 'Mode started',
-    'toast.modeStartFail': 'Start failed',
-    'toast.modeStopped': 'Mode stopped',
-    'toast.modeStopFail': 'Stop failed',
-    'toast.modeAdded': 'Mode added',
-    'toast.addFail': 'Add failed',
-    'toast.connectionOk': 'Connection test successful',
-    'toast.connectionFail': 'Connection test failed',
-    'app.wechat': 'WeChat',
-    'app.wework': 'WeCom',
-    'app.dingtalk': 'DingTalk',
-    'app.lark': 'Lark',
-    'app.slack': 'Slack',
-    'app.telegram': 'Telegram',
-    'app.generic': 'Other Desktop App'
-  }
-}
-
-interface I18nContextValue {
-  t: (key: string) => string
-  locale: Locale
-  setLocale: (l: Locale) => void
-}
-
-const I18nContext = createContext<I18nContextValue>({
-  t: (key: string) => key,
-  locale: 'zh',
-  setLocale: () => {}
-})
-
-function useI18n(): I18nContextValue {
-  return useContext(I18nContext)
-}
-
-interface LogEntry {
-  time: string
-  type: 'thinking' | 'reply' | 'skip' | 'error'
-  content: string
-}
-
-type SettingsSection = 'base' | 'model' | 'training' | 'agent' | 'enterprise'
+type SettingsSection = 'base' | 'model' | 'agent' | 'enterprise'
 type WorkspaceSection = SettingsSection | 'memory' | 'objects' | 'knowledge'
 type AppType = 'wechat' | 'wework' | 'dingtalk' | 'lark' | 'slack' | 'telegram' | 'generic'
 
@@ -297,16 +34,6 @@ interface BoxRegions {
   displayId?: number
   scaleFactor?: number
   capturedAt: number
-}
-
-const APP_TYPE_LABELS: Record<AppType, string> = {
-  wechat: '微信',
-  wework: '企业微信',
-  dingtalk: '钉钉',
-  lark: '飞书 / Lark',
-  slack: 'Slack',
-  telegram: 'Telegram',
-  generic: '其他桌面应用'
 }
 
 interface InstalledProviderInfo {
@@ -502,18 +229,6 @@ const BUILTIN_PROVIDER_CATALOG: ProviderCatalogItem[] = [
   }
 ]
 
-const PlayIcon = (): React.JSX.Element => (
-  <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
-    <path d="M8 5.14v14l11-7-11-7z" />
-  </svg>
-)
-
-const StopIcon = (): React.JSX.Element => (
-  <svg viewBox="0 0 24 24" fill="currentColor">
-    <rect x="6" y="6" width="12" height="12" rx="2" />
-  </svg>
-)
-
 const GearIcon = (): React.JSX.Element => (
   <svg
     viewBox="0 0 24 24"
@@ -560,12 +275,6 @@ const RefreshIcon = (): React.JSX.Element => (
   </svg>
 )
 
-interface ModeState {
-  logs: LogEntry[]
-  modeRunning: boolean
-  modeStarting: boolean
-}
-
 async function readModeConfiguration(): Promise<
   [ReplyMode[] | undefined, AppSettings | undefined]
 > {
@@ -579,13 +288,10 @@ function App(): React.JSX.Element {
   const windowKind = new URLSearchParams(window.location.search).get('window')
   const [modes, setModes] = useState<ReplyMode[]>([])
   const [activeModeId, setActiveModeId] = useState<string>('')
-  const [runningModeIds, setRunningModeIds] = useState<Set<string>>(new Set())
-  const [modeStates, setModeStates] = useState<Map<string, ModeState>>(new Map())
   const [homeSection, setHomeSection] = useState<WorkspaceSection | null>(null)
   const [visitedSections, setVisitedSections] = useState<Set<WorkspaceSection>>(new Set())
   const [locale, setLocaleState] = useState<Locale>('zh')
   const [theme, setThemeState] = useState<'dark' | 'light'>('dark')
-  const [modeUserInputs, setModeUserInputs] = useState<Map<string, string>>(new Map())
   useModalKeyboard()
   useEffect(() => {
     document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en'
@@ -638,84 +344,6 @@ function App(): React.JSX.Element {
   }, [])
 
   const i18nValue = useMemo(() => ({ t, locale, setLocale }), [t, locale, setLocale])
-
-  const getModeState = useCallback(
-    (modeId: string): ModeState => {
-      return (
-        modeStates.get(modeId) || {
-          logs: [],
-          modeRunning: false,
-          modeStarting: false
-        }
-      )
-    },
-    [modeStates]
-  )
-
-  const updateModeState = useCallback((modeId: string, patch: Partial<ModeState>) => {
-    setModeStates((prev) => {
-      const next = new Map(prev)
-      const current = next.get(modeId) || {
-        logs: [],
-        modeRunning: false,
-        modeStarting: false
-      }
-      next.set(modeId, { ...current, ...patch })
-      return next
-    })
-  }, [])
-
-  const addLogToMode = useCallback((modeId: string, type: LogEntry['type'], content: string) => {
-    setModeStates((prev) => {
-      const next = new Map(prev)
-      const current = next.get(modeId) || {
-        logs: [],
-        modeRunning: false,
-        modeStarting: false
-      }
-      const time = new Date().toLocaleTimeString('en-US', { hour12: false })
-      next.set(modeId, { ...current, logs: [...current.logs.slice(-99), { time, type, content }] })
-      return next
-    })
-  }, [])
-
-  useEffect(() => {
-    const cleanup = window.electron?.on('engine:state', () => {})
-    return cleanup
-  }, [])
-
-  useEffect(() => {
-    const cleanup = window.electron?.on(
-      'mode:runningChanged',
-      (data: { modeId: string; running: boolean }) => {
-        setRunningModeIds((prev) => {
-          const next = new Set(prev)
-          if (data.running) next.add(data.modeId)
-          else next.delete(data.modeId)
-          return next
-        })
-        updateModeState(data.modeId, {
-          modeRunning: data.running,
-          modeStarting: data.running ? false : undefined
-        })
-      }
-    )
-    return cleanup
-  }, [updateModeState])
-
-  useEffect(() => {
-    const cleanup = window.electron?.on(
-      'engine:log',
-      (data: { type: string; content: string; modeId?: string }) => {
-        const targetModeId = data.modeId || activeModeId
-        if (!targetModeId) return
-        const ms = modeStates.get(targetModeId)
-        if (!ms || (!ms.modeRunning && !ms.modeStarting)) return
-        addLogToMode(targetModeId, data.type as LogEntry['type'], data.content)
-      }
-    )
-    return cleanup
-  }, [activeModeId, modeStates, addLogToMode])
 
   const applyModeConfiguration = useCallback(
     async (list: ReplyMode[] | undefined, settings: AppSettings | undefined): Promise<void> => {
@@ -875,14 +503,8 @@ function App(): React.JSX.Element {
             ))}
           </div>
           <div className="workspace-sidebar-footer">
-            <span className={`status-dot ${runningModeIds.size ? 'running' : 'idle'}`} />
-            <span>
-              {window.agentRuntime
-                ? '桌面工作台'
-                : runningModeIds.size
-                  ? '助手运行中'
-                  : '助手待启动'}
-            </span>
+            <span className="status-dot idle" />
+            <span>微信自动回复</span>
           </div>
         </aside>
 
@@ -914,21 +536,10 @@ function App(): React.JSX.Element {
                 <ModeSubInterface
                   key={activeMode.id}
                   mode={activeMode}
-                  modeState={getModeState(activeMode.id)}
-                  updateModeState={(patch) => updateModeState(activeMode.id, patch)}
                   onModesChanged={loadModes}
                   active={homeSection === null}
-                  userInput={modeUserInputs.get(activeMode.id) || ''}
-                  onUserInputChange={(val) =>
-                    setModeUserInputs((prev) => {
-                      const next = new Map(prev)
-                      next.set(activeMode.id, val)
-                      return next
-                    })
-                  }
                   modes={modes}
                   onOpenSection={openSection}
-                  anyModeRunning={runningModeIds.size > 0}
                 />
               ) : (
                 <div className="workspace-grid automation-empty-home">
@@ -976,84 +587,19 @@ function App(): React.JSX.Element {
     </I18nContext.Provider>
   )
 }
-
 function ModeSubInterface({
   mode,
-  modeState,
-  updateModeState,
   onModesChanged,
   active,
-  userInput,
-  onUserInputChange,
   modes,
-  onOpenSection,
-  anyModeRunning
+  onOpenSection
 }: {
   mode: ReplyMode
-  modeState: ModeState
-  updateModeState: (patch: Partial<ModeState>) => void
   onModesChanged: () => void
   active: boolean
-  userInput: string
-  onUserInputChange: (value: string) => void
   modes: ReplyMode[]
   onOpenSection: (section: WorkspaceSection) => void
-  anyModeRunning: boolean
 }): React.JSX.Element {
-  const native = Boolean(window.agentRuntime)
-  const logRef = useRef<HTMLDivElement>(null)
-  const [logExpanded, setLogExpanded] = useState(false)
-  const [feedback, setFeedback] = useState('')
-  useEffect(() => {
-    void window.electron?.invoke('engine:setUserInput', mode.id, userInput)
-  }, [userInput, mode.id, modeState.modeRunning])
-  const start = async (): Promise<void> => {
-    if (modeState.modeStarting) return
-    updateModeState({ modeStarting: true })
-    setFeedback('')
-    try {
-      const settings = (await window.electron?.invoke('settings:getAll')) as AppSettings | undefined
-      if (
-        !settings?.models?.some((item) => item.id === settings.globalVisionModelId) &&
-        !settings?.vision?.apiKey
-      ) {
-        setFeedback('请先配置视觉模型，再启动自动回复。')
-        return
-      }
-      const saved = await window.electron?.invoke('mode:setAutoReply', mode.id, true)
-      if (!saved?.success) {
-        setFeedback(saved?.error || '无法开启自动回复。')
-        return
-      }
-      if (!settings.globalDefaultModeId || settings.globalDefaultModeId === mode.id) {
-        const configured = await window.electron?.invoke('settings:set', {
-          globalDefaultModeId: settings.globalDefaultModeId || mode.id,
-          globalAutoReply: true
-        })
-        if (!configured?.success) {
-          setFeedback(configured?.error || '无法保存默认回复设置。')
-          return
-        }
-      }
-      onModesChanged()
-      const result = await window.electron?.invoke('mode:start', mode.id)
-      if (result?.success) updateModeState({ modeRunning: true })
-      else setFeedback(result?.error || '启动失败，请检查配置。')
-    } catch {
-      setFeedback('启动失败，请重试。')
-    } finally {
-      updateModeState({ modeStarting: false })
-    }
-  }
-  const stop = async (): Promise<void> => {
-    try {
-      const result = await window.electron?.invoke('mode:stop', mode.id)
-      if (result?.success) updateModeState({ modeRunning: false })
-      else setFeedback(result?.error || '停止结果尚未确认，请重试。')
-    } catch {
-      setFeedback('停止结果尚未确认，请重试。')
-    }
-  }
   return (
     <div className="home-mode automation-home">
       <header className="home-mode-header">
@@ -1062,128 +608,18 @@ function ModeSubInterface({
           <strong>统一回复规则</strong>
           <span>知识库提供依据，规则决定如何回复</span>
         </div>
-        <button
-          className="btn btn-text home-edit-rules"
-          onClick={() => {
-            const editor = document.getElementById('home-mode-prompt')
-            editor?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-            editor?.focus({ preventScroll: true })
-          }}
-        >
-          编辑回复规则
-        </button>
         <button className="btn btn-text home-users-link" onClick={() => onOpenSection('objects')}>
           <HomeToolIcon section="objects" />
-          对象用户{' '}
-          <span>{modes.reduce((count, item) => count + item.specificObjects.length, 0)}</span> ↗
+          对象用户 {modes.reduce((count, item) => count + item.specificObjects.length, 0)} ↗
         </button>
       </header>
       <div className="workspace-grid automation-grid">
         <div className="workspace-primary">
-          {native ? (
-            <AutomationConsole
-              active={active}
-              onOpenConnection={() => onOpenSection('enterprise')}
-            />
-          ) : (
-            <>
-              <section
-                className="workspace-panel automation-local-control"
-                aria-labelledby="home-automation-heading"
-              >
-                <div className="panel-heading">
-                  <h3 id="home-automation-heading">AI 自动回复</h3>
-                  <span className="home-reply-state">
-                    {modeState.modeRunning ? '运行中' : '已停止'}
-                  </span>
-                </div>
-                <p>
-                  启动后，AI 将按回复规则生成并直接发送回复。对象用户中关闭自动回复的设置会保留。
-                </p>
-                <button
-                  className={`btn ${modeState.modeRunning ? 'btn-secondary' : 'btn-primary'}`}
-                  disabled={modeState.modeStarting}
-                  onClick={() => void (modeState.modeRunning ? stop() : start())}
-                >
-                  {modeState.modeRunning ? <StopIcon /> : <PlayIcon />}
-                  {modeState.modeRunning
-                    ? '暂停自动回复'
-                    : modeState.modeStarting
-                      ? '正在启动…'
-                      : '启动自动回复'}
-                </button>
-                {feedback && (
-                  <p role="alert" className="automation-connection-error">
-                    {feedback}
-                  </p>
-                )}
-              </section>
-              <section
-                className="workspace-panel home-log-panel"
-                aria-labelledby="home-log-heading"
-              >
-                <div className="panel-heading">
-                  <h3 id="home-log-heading">运行记录</h3>
-                  <button
-                    className="btn btn-text"
-                    aria-expanded={logExpanded}
-                    onClick={() => setLogExpanded(!logExpanded)}
-                  >
-                    {logExpanded ? '收起记录' : '展开记录'}
-                  </button>
-                </div>
-                <div
-                  className={`message-log ${logExpanded ? 'home-log-expanded' : 'home-log-compact'}`}
-                  ref={logRef}
-                >
-                  {modeState.logs.length ? (
-                    modeState.logs.map((entry, index) => (
-                      <div className="log-entry" key={index}>
-                        <span className="log-time">{entry.time}</span>
-                        <span>{entry.content}</span>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="home-empty-row">启动后，这里会显示实际运行记录。</div>
-                  )}
-                </div>
-              </section>
-            </>
-          )}
-          <details className="workspace-panel automation-supplement">
-            <summary>
-              临时回复要求 <span>可选</span>
-            </summary>
-            <div className="panel-label-row">
-              <label htmlFor="home-user-input">
-                补充要求 <span>可选</span>
-              </label>
-              <button
-                className="btn btn-text"
-                disabled={!userInput}
-                onClick={() => onUserInputChange('')}
-              >
-                清除
-              </button>
-            </div>
-            <textarea
-              id="home-user-input"
-              className="form-input"
-              value={userInput}
-              onChange={(event) => onUserInputChange(event.target.value)}
-              rows={2}
-              placeholder="例如：语气轻松一些，提醒对方明天下午联系。"
-            />
-            {native && (
-              <p className="form-hint">
-                企业自动回复使用已同步的企业规则；此处补充要求用于本地回复。
-              </p>
-            )}
-          </details>
+          <AutomationConsole active={active} onOpenConnection={() => onOpenSection('enterprise')} />
         </div>
         <aside className="workspace-configuration" aria-label="主页配置">
           <HomeModeRules mode={mode} onSaved={onModesChanged} />
-          <HomeConfiguration onOpenSection={onOpenSection} anyModeRunning={anyModeRunning} />
+          <HomeConfiguration onOpenSection={onOpenSection} />
         </aside>
       </div>
     </div>
@@ -1806,12 +1242,6 @@ function SettingsWindow({
           {t('settings.model')}
         </button>
         <button
-          className={`settings-nav-item ${section === 'training' ? 'active' : ''}`}
-          onClick={() => setSection('training')}
-        >
-          {t('settings.training')}
-        </button>
-        <button
           className={`settings-nav-item ${section === 'agent' ? 'active' : ''}`}
           onClick={() => setSection('agent')}
         >
@@ -1826,8 +1256,6 @@ function SettingsWindow({
           <SettingsPanel theme={theme} setTheme={setTheme} locale={locale} setLocale={setLocale} />
         ) : section === 'model' ? (
           <ModelConfigPanel />
-        ) : section === 'training' ? (
-          <TrainingPanel />
         ) : (
           <AgentPanel />
         )}
@@ -1986,106 +1414,6 @@ function SettingsPanel({
           >
             {t('settings.testConnection')}
           </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function TrainingPanel(): React.JSX.Element {
-  const [training, setTraining] = useState(false)
-  const [trainLog, setTrainLog] = useState<{ time: string; message: string }[]>([])
-  const trainLogRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const handler = (data: unknown): void => {
-      const event = typeof data === 'object' && data !== null ? data : {}
-      const msg =
-        'message' in event && typeof event.message === 'string' && event.message
-          ? event.message
-          : (JSON.stringify(data) ?? String(data))
-      const type = 'type' in event ? event.type : undefined
-      const time = new Date().toLocaleTimeString('en-US', { hour12: false })
-      setTrainLog((prev) => [...prev, { time, message: msg }])
-      if (type === 'exited' || type === 'completed' || type === 'error') {
-        setTraining(false)
-      }
-    }
-    const cleanup = window.electron?.on('train:event', handler)
-    return () => {
-      cleanup?.()
-    }
-  }, [])
-
-  useEffect(() => {
-    if (trainLogRef.current) {
-      trainLogRef.current.scrollTop = trainLogRef.current.scrollHeight
-    }
-  }, [trainLog])
-
-  useEffect(() => {
-    const check = async (): Promise<void> => {
-      const status = await window.electron?.invoke('train:status')
-      if (status?.running) setTraining(true)
-    }
-    void check()
-  }, [])
-
-  return (
-    <div className="settings-page">
-      <div className="settings-page-header">
-        <div>
-          <h1>模型训练</h1>
-          <p>训练和管理 AI 模型。</p>
-        </div>
-      </div>
-
-      <div className="card base-settings-card">
-        <div className="card-title">情感模型训练</div>
-        <div className="form-hint" style={{ marginBottom: 12 }}>
-          训练基于 BERT 的抑郁倾向分类模型。训练数据来自 Kaggle 中文抑郁数据集，训练完成后自动保存为
-          best.pt。
-        </div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-          <button
-            className="btn btn-primary"
-            disabled={training}
-            onClick={async () => {
-              setTrainLog([])
-              setTraining(true)
-              const result = await window.electron?.invoke('train:start')
-              if (!result?.ok) {
-                setTraining(false)
-                showToast(result?.error || '启动训练失败', 'error')
-              }
-            }}
-          >
-            {training ? '训练中...' : '开始训练'}
-          </button>
-          {training && (
-            <button
-              className="btn btn-secondary"
-              onClick={async () => {
-                await window.electron?.invoke('train:stop')
-                setTraining(false)
-              }}
-            >
-              停止训练
-            </button>
-          )}
-        </div>
-        <div className="message-log" ref={trainLogRef}>
-          {trainLog.length > 0 ? (
-            trainLog.map((entry, i) => (
-              <div key={i} className="log-entry">
-                <span className="log-time">{entry.time}</span>
-                <span className="log-type train">TRAIN</span>
-                <span>{entry.message}</span>
-              </div>
-            ))
-          ) : (
-            <div className="message-log-empty">暂无训练日志</div>
-          )}
         </div>
       </div>
     </div>
@@ -2852,7 +2180,6 @@ const HOME_TOOLS: { section: WorkspaceSection; label: string; description: strin
   { section: 'knowledge', label: '知识管理', description: '上传资料、检索知识与规则试答' },
   { section: 'model', label: '模型配置', description: '密钥与连接' },
   { section: 'memory', label: '工作记忆', description: '轨迹与经验' },
-  { section: 'training', label: '模型训练', description: '情感模型' },
   { section: 'enterprise', label: '企业连接', description: '登记与客户回复' },
   { section: 'agent', label: '智能体', description: '供应商与配置' },
   { section: 'base', label: '基础设置', description: '外观与语言' }
@@ -2907,7 +2234,6 @@ function HomeToolIcon({ section }: { section: WorkspaceSection | 'home' }): Reac
       </svg>
     )
   if (section === 'memory') return <MemoryIcon />
-  if (section === 'training') return <PlayIcon />
   if (section === 'enterprise') return <RefreshIcon />
   return <GearIcon />
 }
@@ -3029,8 +2355,6 @@ function HomeSectionContent({
         />
       ) : section === 'model' ? (
         <ModelConfigPanel active={active} />
-      ) : section === 'training' ? (
-        <TrainingPanel />
       ) : (
         <AgentPanel />
       )}
@@ -3039,11 +2363,9 @@ function HomeSectionContent({
 }
 
 function HomeConfiguration({
-  onOpenSection,
-  anyModeRunning = false
+  onOpenSection
 }: {
   onOpenSection: (section: WorkspaceSection) => void
-  anyModeRunning?: boolean
 }): React.JSX.Element {
   const [settings, setSettings] = useState<AppSettings>()
   const [busy, setBusy] = useState(false)
@@ -3108,30 +2430,6 @@ function HomeConfiguration({
       setBusy(false)
     }
   }
-  const configureRegion = async (): Promise<void> => {
-    if (busy || !settings || anyModeRunning) return
-    setBusy(true)
-    setFeedback('请在聊天窗口上框选区域')
-    setFailed(false)
-    try {
-      const result = await window.electron?.invoke('capture:openSetupWizard', {
-        appType: settings.appType
-      })
-      if (result?.success) {
-        await load()
-        setFeedback('聊天区域已保存')
-      } else if (result?.reason === 'cancelled') setFeedback('已取消框选')
-      else {
-        setFailed(true)
-        setFeedback(result?.error || '未能完成框选，请重试。')
-      }
-    } catch {
-      setFailed(true)
-      setFeedback('未能打开框选向导，请重试。')
-    } finally {
-      setBusy(false)
-    }
-  }
   const disabled = busy || !settings
   const visionId = settings?.globalVisionModelId || ''
   const replyId = settings?.globalReplyModelId || ''
@@ -3148,39 +2446,11 @@ function HomeConfiguration({
       </div>
       <div className="home-config-pair">
         <div>
-          <label className="form-label" htmlFor="home-target-app">
-            目标应用
-          </label>
-          <select
-            className="form-input"
-            id="home-target-app"
-            value={settings?.appType || 'wechat'}
-            disabled={disabled || anyModeRunning}
-            title={anyModeRunning ? '停止自动回复后可切换应用' : undefined}
-            onChange={(event) => void save({ appType: event.target.value as AppType })}
-          >
-            {Object.entries(APP_TYPE_LABELS).map(([id, label]) => (
-              <option key={id} value={id}>
-                {label}
-              </option>
-            ))}
-          </select>
+          <label className="form-label">个人回复对象</label>
+          <p>Windows 个人微信 · 企业规则在企业连接页配置</p>
         </div>
       </div>
-      <div className="home-capture-row">
-        <span>
-          聊天区域{' '}
-          <small>{settings?.capture[settings.appType]?.regions ? '已框选' : '自动设置'}</small>
-        </span>
-        <button
-          className="btn btn-text"
-          disabled={disabled || anyModeRunning}
-          title={anyModeRunning ? '停止自动回复后可重新框选' : undefined}
-          onClick={() => void configureRegion()}
-        >
-          框选区域
-        </button>
-      </div>
+
       {(['vision', 'reply'] as const).map((purpose) => {
         const id = purpose === 'vision' ? visionId : replyId
         return (
@@ -3295,31 +2565,19 @@ function HomeModeRules({
 }): React.JSX.Element {
   const [prompt, setPrompt] = useState(mode.prompt)
   const [prefix, setPrefix] = useState(mode.unifiedPrefix)
-  const [sentiment, setSentiment] = useState(mode.sentimentEnabled)
   const [busy, setBusy] = useState(false)
   const [feedback, setFeedback] = useState('')
   const original = useRef(mode)
   useEffect(() => {
     const previous = original.current
-    if (
-      mode.prompt === previous.prompt &&
-      mode.unifiedPrefix === previous.unifiedPrefix &&
-      mode.sentimentEnabled === previous.sentimentEnabled
-    )
-      return
-    if (
-      prompt === previous.prompt &&
-      prefix === previous.unifiedPrefix &&
-      sentiment === previous.sentimentEnabled
-    ) {
+    if (mode.prompt === previous.prompt && mode.unifiedPrefix === previous.unifiedPrefix) return
+    if (prompt === previous.prompt && prefix === previous.unifiedPrefix) {
       setPrompt(mode.prompt)
       setPrefix(mode.unifiedPrefix)
-      setSentiment(mode.sentimentEnabled)
     }
     original.current = mode
-  }, [mode, prompt, prefix, sentiment])
-  const dirty =
-    prompt !== mode.prompt || prefix !== mode.unifiedPrefix || sentiment !== mode.sentimentEnabled
+  }, [mode, prompt, prefix])
+  const dirty = prompt !== mode.prompt || prefix !== mode.unifiedPrefix
   const save = async (): Promise<void> => {
     if (busy) return
     if (!prompt.trim()) {
@@ -3332,7 +2590,7 @@ function HomeModeRules({
       const result = await window.electron?.invoke('mode:update', mode.id, {
         prompt: prompt.trim(),
         unifiedPrefix: prefix,
-        sentimentEnabled: sentiment,
+        sentimentEnabled: false,
         ...(!mode.enabled ? { enabled: true } : {})
       })
       if (!result?.success) throw new Error('save_failed')
@@ -3390,17 +2648,6 @@ function HomeModeRules({
         />
       </div>
       <div className="home-rule-bottom">
-        <label className="home-sentiment">
-          <input
-            type="checkbox"
-            checked={sentiment}
-            onChange={(event) => {
-              setSentiment(event.target.checked)
-              setFeedback('')
-            }}
-          />
-          情感分析
-        </label>
         <button
           className="btn btn-primary btn-sm"
           disabled={busy || (!dirty && mode.enabled)}

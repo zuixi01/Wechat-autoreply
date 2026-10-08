@@ -4,6 +4,7 @@
 // 这样后续派生的 electron-vite / electron 子进程的 UTF-8 输出才能被终端正确渲染。
 
 import { execSync, spawn } from 'node:child_process'
+import './prepare-foreground.mjs'
 
 if (process.platform === 'win32') {
   try {

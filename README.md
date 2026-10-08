@@ -1,285 +1,72 @@
-<a name="readme-top"></a>
+# 微信自动回复
 
-<div align="center">
+Windows 个人微信自动回复客户端，包含独立的企业回复服务。基于 SightFlow 开发，采用 Electron、React、视觉模型与本项目的 Windows 窗口辅助程序。许可证为 Apache-2.0，原项目归属与第三方说明见 NOTICE 和 LICENSE。
 
-<h1>AutoReply · 智能回复助手</h1>
+个人微信是默认入口：选择联系人 → 读取完整文字消息 → 按回复规则与知识库生成 → 核对联系人、窗口和草稿 → 保存发送记录 → 发送 → 核对微信中的回复回显。整个流程通过前台截图运行，需要微信保持在前台；切换应用会等待，回到原聊天后重新校验。
 
-<p><strong>AI 驱动的桌面端智能自动回复系统 —— 看懂界面、识别对象、智能回复、沉淀经验。</strong></p>
+## 启动
 
-<p>
-  <a href="./README.en.md">English</a>
-  &nbsp;·&nbsp;
-  <a href="./README.md"><b>简体中文</b></a>
-</p>
+开发环境需要 Windows x64、Node.js 24.21 或兼容的 Node 24，以及 .NET 10 SDK。当前工作区已配置的工具链位于 `.local/toolchain`；新克隆可使用系统安装的工具链。原生输入依赖安装失败时需安装 Windows C++ 构建工具。
 
-<p>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0" /></a>
-  <img src="https://img.shields.io/badge/Platform-Windows-success" alt="Platform: Windows" />
-  <img src="https://img.shields.io/badge/Electron-44-blue" alt="Electron 44" />
-</p>
-
-<p>
-  <a href="#-项目概述"><b>项目概述</b></a> ·
-  <a href="#-核心功能"><b>核心功能</b></a> ·
-  <a href="#-相较于原项目的优势"><b>优势对比</b></a> ·
-  <a href="#-快速开始"><b>快速开始</b></a> ·
-  <a href="#-配置说明"><b>配置说明</b></a> ·
-  <a href="#-架构概览"><b>架构概览</b></a>
-</p>
-
-</div>
-
----
-
-## 📌 项目概述
-
-个人微信新增[批量自动回复入口](docs/personal-wechat-batch.zh-CN.md)：一次配置联系人名单，自动滚动扫描会话列表、排队处理未读消息并保存处理状态。这是前台截图模式，真实收发与规模化运行的验收状态见[能力报告](docs/capability-report.wechat.md)。
-
-本工作区正在开发面向多员工微信/企业微信私聊的可靠回复版本，实施与验收状态见 [开发计划](docs/development-plan.zh-CN.md) 和 [实施记录](docs/implementation-status.zh-CN.md)。真实后台收发、持续办公和发布试点仍待验收。当前仅允许加载随应用发布并校验的内置 Provider 代码，旧外部 JavaScript 服务包不再安装或执行；模型接口通过受控配置接入。
-
-**AutoReply（智能回复助手）** 是一款基于视觉语言模型 (VLM) 的桌面端智能自动回复系统，专注于即时通讯场景。系统能够自动监控聊天窗口、理解对话内容、生成个性化回复，并从每一次交互中沉淀可复用的对话经验。
-
-基于 [SightFlow](https://github.com/sightflow-dev/sightflow-desktop-agent) 开源项目深度二次开发，在保留原有视觉驱动自动化能力的基础上，新增了 **多模式管理、特定对象路由、半自动回复、工作记忆引擎、情感分析** 等核心功能，将项目从一个通用 RPA 工具升级为专注对话场景的智能回复平台。
-
----
-
-## ✦ 核心功能
-
-### 🎯 智能对话回复
-
-| 能力           | 说明                                                               |
-| :------------- | :----------------------------------------------------------------- |
-| **视觉驱动**   | 通过 VLM 自动识别聊天窗口布局，提取消息内容，无需任何 API 接入     |
-| **半自动回复** | AI 推荐回复 → 用户一键粘贴/回复/跳过，人机协作更安全               |
-| **全自动化**   | 支持全局/模式/对象三级自动回复开关，无人值守也可运行               |
-| **情感分析**   | 可选启用 BERT 情感分类，识别对话情绪倾向，辅助生成更贴合语境的回复 |
-
-### 🧠 多模式管理
-
-| 能力           | 说明                                                  |
-| :------------- | :---------------------------------------------------- |
-| **预设模式**   | 内置系统模式，可禁用不可删除                          |
-| **自定义模式** | 自由创建模式，配置专属 Prompt、情感分析开关、统一开头 |
-| **独立运行**   | 每个模式拥有独立的运行状态、日志流和推荐回复          |
-| **并行运行**   | 多模式可同时运行，各自维护独立的对话检测循环          |
-
-### 👤 特定对象路由
-
-| 能力            | 说明                                                     |
-| :-------------- | :------------------------------------------------------- |
-| **对象识别**    | VLM 从聊天窗口标题栏自动提取对话对象名称                 |
-| **智能路由**    | 匹配特定对象 → 路由到专属模式；未匹配 → 使用全局默认模式 |
-| **个性化配置**  | 每个对象可设置特定称呼、关系描述、独立自动回复策略       |
-| **Prompt 注入** | 对象的称呼和关系自动注入 Prompt，让回复更贴合语境        |
-
-### 📚 工作记忆引擎
-
-这是 AutoReply 最具差异化的能力 —— 让 AI 从每次对话中**学习和积累经验**：
-
-| 层级        | 能力       | 说明                                                      |
-| :---------- | :--------- | :-------------------------------------------------------- |
-| **L1 记录** | 结构化轨迹 | 每步操作记录：时间戳 / 界面状态 / 判断依据 / 动作 / 结果  |
-| **L2 回放** | 轨迹回放   | 时间轴卡片流 + 逐步回放 + 截图高亮，可复盘每一步决策      |
-| **L3 继承** | 经验沉淀   | 轨迹自动归纳为经验卡片，运行时注入 Prompt，效果可量化统计 |
-
-> 别人记录的是**操作步骤**，我们记录的是**「为什么这么做」**。从 RPA 到 Agent Runtime 的关键差别。
-
-### 🖥️ 多供应商模型支持
-
-| 供应商                    | 默认模型                    | 能力        |
-| :------------------------ | :-------------------------- | :---------- |
-| 火山方舟 (Volcengine Ark) | doubao-seed-2-0-lite-260215 | 文本 + 视觉 |
-| 阿里云百炼 (DashScope)    | qwen-vl-plus                | 文本 + 视觉 |
-| OpenAI                    | gpt-4o                      | 文本 + 视觉 |
-| DeepSeek                  | deepseek-chat               | 文本        |
-| 自定义                    | -                           | 文本        |
-
-- **视觉模型**与**回复模型**分离配置，灵活组合
-- 模型能力标记（text/vision/audio），连接测试功能
-- 不支持视觉的回复模型自动启用文本提取模式
-- 点击模型卡片任意位置即可打开编辑，测试连接按钮一键验证
-
-### 📱 多平台即时通讯支持
-
-| 应用                           | 检测方式             |
-| :----------------------------- | :------------------- |
-| 微信 / 企业微信                | VLM 自动检测窗口布局 |
-| 钉钉 / 飞书 / Slack / Telegram | 手动框选区域         |
-| 其他桌面应用                   | 手动框选区域         |
-
----
-
-## ✦ 相较于原项目的优势
-
-| 维度         | SightFlow（原项目） | AutoReply（本项目）                                          |
-| :----------- | :------------------ | :----------------------------------------------------------- |
-| **定位**     | 通用桌面 RPA 工具   | 专注对话场景的智能回复平台                                   |
-| **回复模式** | 单一全局模式        | ✅ 多模式管理 + 自定义 Prompt + 独立运行                     |
-| **对象识别** | 无                  | ✅ VLM 对象识别 + 特定对象路由 + 个性化配置                  |
-| **回复方式** | 仅全自动            | ✅ 半自动（推荐/粘贴/回复/跳过）+ 全自动，三级自动回复优先级 |
-| **经验积累** | 工作轨迹记录        | ✅ 轨迹记录 + 回放 + 经验沉淀 + 运行时注入 + 效果量化        |
-| **模型配置** | 固定火山方舟        | ✅ 多供应商支持 + 视觉/回复模型分离 + 能力标记               |
-| **待机管理** | 无                  | ✅ 渐进式退避待机 + 语义确认退出 + 状态可视化                |
-| **情感分析** | 无                  | ✅ 可选 BERT 情感分类 + 情绪感知回复策略                     |
-| **模型训练** | 无                  | ✅ 内置训练界面 + Kaggle 数据集 + 实时进度推送               |
-| **人工纠正** | 无                  | ✅ 轨迹步骤纠正 → 沉淀为经验卡片                             |
-
----
-
-## 🚀 快速开始
-
-### 前置条件
-
-- **Node.js** (LTS 版本)
-- **Python 3.8+**（情感分析模块需要）
-- **npm**
-
-### 1. 安装依赖
-
-```bash
-git clone https://github.com/DreDabe/auto-reply.git
-cd auto-reply
-
-npm install
-```
-
-### 2. Python 依赖
-
-首次运行时，程序会**自动检测并安装** Python 依赖（`torch`, `transformers`, `pandas`, `scikit-learn`, `kagglehub`, `tqdm`, `numpy`）。
-
-如需手动安装：
-
-```bash
-pip install -r sentpredict/requirements.txt
-```
-
-> 国内用户建议配置 HuggingFace 镜像：程序已内置 `HF_ENDPOINT=https://hf-mirror.com`。
-
-### 3. 运行开发模式
-
-```bash
+```powershell
+npm ci
 npm run dev
 ```
 
-### 4. 构建发布
+开发启动和普通构建会自动准备个人微信窗口辅助程序，并在构建时校验其哈希。企业发布包另行包含企业适配器。
 
-```bash
-npm run build:win     # Windows
-npm run build:mac     # macOS
-npm run build:linux   # Linux
+1. 登录个人微信，关闭多开窗口，把完整窗口放在主显示器内。
+2. 在“模型配置”中添加兼容 Chat Completions 的 HTTPS 模型接口和密钥，测试连接。视觉模型必须支持图片输入；主页分别选择视觉模型和回复模型。
+3. 在主页保存统一回复规则。可在“对象用户”中配置准确备注名对应的专属要求，也可导入知识资料。
+4. 输入联系人的准确备注名，点击“启动个人微信自动回复”。同名或搜索不完整时，先在微信打开指定单聊并清空草稿，再点击“接入已打开的聊天”。
+5. 首次启动忽略历史消息，只处理之后收到的完整文字消息。暂停及程序重启会保留处理进度，重新启动后核对并继续。更换窗口、修改规则或人工接管后，可选择“以当前消息重新接入”。
+
+发现人工草稿、人工回复、消息断层或无法确认对象时会暂停。发送结果不确定会保留记录并阻止再次发送；在微信人工核对后，勾选确认并标记已发送或未发送，再重新启动。这条消息不会自动重发。
+
+“多联系人批量自动回复”作为展开功能保留，仅处理填写名单中的联系人。先验证单联系人，再扩大范围。
+
+## 企业能力
+
+企业连接、服务端、数据库迁移、工作记忆和人工审核功能保留。客户端首次进入企业功能或工作记忆时才初始化相关服务。企业服务安装与发布见 [server/README.md](server/README.md)，能力边界见 [企业微信能力报告](docs/capability-report.wework.md)。企业后台真实收发需要经过验证的平台适配器，当前窗口探测辅助程序本身不提供后台聊天收发能力。
+
+## 验证和打包
+
+```powershell
+npm run test:personal                 # 隔离完整流程：模拟桌面、实际本地 HTTP、实际 SQLite
+npm run test:foreground-input         # Windows Unicode 按下/松开与原生结构验证，不操作桌面
+npm run verify                        # 类型检查、静态检查、全部单元/集成/回归测试
+npm run build                         # 开发构建
+npm run build:win:dev                  # 隔离的 Windows 可运行版本
+npm run test:desktop:release           # 实际 Electron 界面与 IPC 验证，独立测试资料
+npm run build:win:installer:dev        # Windows 安装包
 ```
 
----
+只有明确授权的测试联系人才能进行真实发送验收：
 
-## ⚙️ 配置说明
-
-### 基础配置
-
-1. 打开 [火山引擎控制台 → 方舟](https://console.volcengine.com/ark)，启用服务并生成 API Key
-2. 启动应用后点击侧边栏底部设置按钮
-3. 在 **基础配置** 中选择全局视觉模型和全局回复模型
-4. 在 **智能体** 中选择启用的 Provider，内置默认为 **豆包 Seed**
-
-### 模型配置
-
-在设置界面的 **模型配置** 中管理不同供应商的 AI 模型：
-
-- 点击 **+ 添加模型** 选择供应商并填写 API Key
-- 支持连接测试，验证配置是否正确
-- 模型能力自动标记，视觉模型用于布局检测，文本模型用于回复生成
-
-### 情感分析
-
-在模式设置中可启用情感分析功能：
-
-1. 在 **模型训练** 中点击 **开始训练** — 自动下载数据集并启动训练
-2. 训练日志实时显示在下方日志视图中
-3. 训练完成后模型自动保存为 `sentpredict/models/best.pt`
-4. 在模式详情中开启情感分析开关即可使用
-
-> ⚠️ 训练过程耗时较长（数小时），首次训练需下载 BERT 预训练权重和数据集。
-
-### 目标应用与框选
-
-- **微信 / 企业微信**：默认使用 VLM 自动检测窗口区域
-- **钉钉、飞书、Slack、Telegram** 等：需手动框选三个区域（会话列表、聊天内容区、输入框）
-
----
-
-## 🏗️ 架构概览
-
-```
-src/
-├── main/
-│   ├── index.ts              # 主进程：窗口管理、IPC、引擎调度
-│   ├── overlay-window.ts     # 框选向导窗口
-│   ├── provider-bundle.ts    # 已发布 Provider 校验与加载
-│   └── skill-server.ts       # 本地 HTTP API
-├── core/
-│   ├── ai-client.ts          # AI 统一调用封装
-│   ├── device.ts             # 设备接口
-│   ├── rpa-device.ts         # VLM 布局检测 + RPA 操作
-│   ├── box-select-device.ts  # 手动框选模式
-│   ├── runtime-host.ts       # 事件队列 + 轨迹 + 记忆
-│   ├── generic-channel-session.ts  # 状态机 + 模式路由
-│   ├── sentiment/
-│   │   └── classifier.ts     # BERT 情感分类器（Python 子进程）
-│   ├── memory/
-│   │   ├── experience-store.ts  # 经验卡片存储
-│   │   └── learn-from-session.ts  # 轨迹→经验归纳
-│   ├── trace/
-│   │   └── trace-recorder.ts # 结构化工作轨迹
-│   ├── rpa/
-│   │   ├── vision-utils.ts   # VLM 视觉检测
-│   │   ├── image-compare.ts  # 像素 Diff 检测
-│   │   ├── has-unread.ts     # 红点检测
-│   │   ├── input-utils.ts    # RPA 输入操作
-│   │   └── screenshot-utils.ts  # 截图工具
-│   └── types.ts              # 全局类型定义
-├── preload/
-│   └── index.ts              # 预加载脚本（IPC Bridge）
-└── renderer/
-    └── src/
-        ├── App.tsx           # 主界面 + 设置界面 + 模式管理
-        ├── MemoryWindow.tsx  # 工作记忆窗口
-        ├── i18n.ts           # 国际化
-        └── index.css         # 全局样式
+```powershell
+npm run test:wechat -- --target "准确备注名"
+# 已手动选定聊天时添加 --current-chat
 ```
 
----
+实机脚本使用实际应用资料和模型接口，等待该联系人发送新消息；确认一条新回复的回显后会暂停并退出。不能收到新消息或验证失败会报告失败，不会用历史消息代替验收。报告位于 `.local/reports/personal-wechat`，不上传聊天内容和密钥。
 
-## 🔐 安全与数据
+中文搜索和回复由窗口辅助程序使用 Windows Unicode 按下/松开事件输入，不依赖剪贴板。每次输入确认微信窗口与前台身份，输入后重新读取草稿全文；文字不一致不会按下发送键。
 
-- 工作记忆 (Work Trace) 和经验卡片默认**本地存储**，不上传任何服务器
-- 情感分析在本地 Python 子进程中执行，文本数据不离开本机
-- API Key 通过 electron-store 本地加密存储
-- 二开版旧 Skill HTTP Server 默认关闭；显式启用仍需独立私有令牌，只接受本机 HTTP 客户端。配置与限制见 [开发环境说明](docs/development-environment.md#可选旧本地控制接口)。
-- **你的工作数据始终属于你**
+## 项目结构和清理
 
----
+- `src/core/agent/foreground-wechat.ts`：个人回复状态与发送保护。
+- `src/main/services/foreground-wechat-driver.ts`：截图识别、模型请求、输入和回显核对。
+- `src/core/persistence/foreground-journal.ts`：SQLite 处理进度、发送记录与人工核对。
+- `src/renderer`：桌面界面；`native`：Windows 辅助程序。
+- `server`：独立企业服务；`tests`：功能与失败场景验证。
 
-## 💬 问题与交流
+Python 情感训练、闲置的 Provider/模拟设备、离线界面样稿和失效测试入口已移除。旧设置中的兼容字段仍可读取。个人自动回复不依赖 Python、PostgreSQL或企业服务启动。
 
-如有问题、建议或反馈，欢迎通过以下方式联系：
+构建成功后自动清理历史产物，保留最近两个成功版本、当前引用版本和近期诊断。也可以先预览再执行：
 
-- 📧 邮箱：[dreadabe@gmail.com](mailto:dreadabe@gmail.com)
+```powershell
+npm run clean:artifacts
+npm run clean:artifacts -- --apply
+```
 
----
-
-## 🤝 致谢
-
-本项目基于以下开源项目进行二次开发：
-
-- **[SightFlow](https://github.com/sightflow-dev/sightflow-desktop-agent)** — 开源桌面端 AI 工作记忆引擎，Apache License 2.0
-
----
-
-## 📄 许可证
-
-Released under the [Apache License 2.0](LICENSE).
-
----
-
-<div align="center"><sub>© 2026 AutoReply. Based on SightFlow. Released under the Apache License 2.0.</sub></div>
-
-<p align="right"><a href="#readme-top">↑ 返回顶部</a></p>
+清理只针对项目内白名单中的历史构建、原生程序旧版本和生成测试资料；保留源码、依赖、工具链、实际用户资料、数据库和个人微信实机报告，不沿目录联接访问外部文件。详细清理清单位于 `.local/reports/artifact-cleanup`。

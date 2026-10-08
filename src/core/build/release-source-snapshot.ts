@@ -62,7 +62,8 @@ export async function inventoryReleaseSources(workspace: string): Promise<Source
   async function visit(relative: string): Promise<void> {
     const name = relative.split('/').at(-1)!
     if (
-      (relative.startsWith('native/') && ['bin', 'obj'].includes(name)) ||
+      ((relative.startsWith('native/') || relative.startsWith('tests/native/')) &&
+        ['bin', 'obj'].includes(name)) ||
       ['node_modules', '.local', '.git'].includes(name) ||
       /^\.env(?:\.|$)/i.test(name) ||
       /\.(?:sqlite(?:3)?|db|pem|key|pfx|p12)(?:-wal|-shm)?$/i.test(name)

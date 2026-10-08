@@ -203,6 +203,19 @@ async function run() {
   await writeFile(join(reportRoot, id, 'result.json'), JSON.stringify(result, null, 2) + '\n')
   await writeFile(join(reportRoot, 'latest.json'), JSON.stringify({ id }) + '\n')
   console.log(JSON.stringify(result))
+  // Retain two successful releases and recent diagnostics. Cleanup failures
+  // cannot invalidate a release whose archive/source checks already passed.
+  try {
+    await command(
+      'node_modules/tsx/dist/cli.mjs',
+      ['scripts/clean-artifacts.ts', '--apply'],
+      workspace
+    )
+  } catch {
+    console.warn(
+      'Historical build cleanup incomplete; run npm run clean:artifacts -- --apply later.'
+    )
+  }
 }
 run().catch(async (error) => {
   const code =

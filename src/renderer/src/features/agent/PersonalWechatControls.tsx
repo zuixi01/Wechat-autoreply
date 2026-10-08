@@ -7,8 +7,8 @@ import {
 
 const states: Record<ForegroundStatus['state'], string> = {
   idle: '未启动',
-  connecting: '正在连接微信',
-  running: '等待 Q 的新消息',
+  connecting: '正在连接微信，请将微信切到前台',
+  running: '等待新消息',
   waiting_foreground: '等待微信回到前台',
   generating: '正在生成回复',
   sending: '正在发送并核对回显',
@@ -17,7 +17,7 @@ const states: Record<ForegroundStatus['state'], string> = {
 const reasons: Record<string, string> = {
   none: '',
   user_pause: '已暂停自动回复。',
-  target_required: '请输入测试联系人。',
+  target_required: '请输入联系人备注名。',
   wechat_window_unavailable: '未找到唯一的个人微信窗口，请先登录微信并关闭多开窗口。',
   wechat_not_logged_in: '请先在微信中完成登录。',
   model_not_configured: '请先在模型配置中填写密钥，并在主页选择视觉模型和回复模型。',
@@ -45,8 +45,8 @@ const reasons: Record<string, string> = {
   capture_failed: '无法截取微信窗口，请确保微信正常显示。',
   desktop_input_unavailable: '桌面输入组件不可用，请重新启动项目。',
   message_gap: '可见消息无法与上次读取连续衔接，已停止，请人工核对后重新启动。',
-  send_unknown:
-    '发送结果无法确认，已停止且不会重发。请在微信中人工核对记录；当前记录不能自动放行。',
+  send_unknown: '发送结果无法确认，已停止且不会重发。请打开微信核对下方记录，再明确标记发送结果。',
+  checkpoint_invalid: '恢复记录不完整，请核对微信后选择“以当前消息重新接入”。',
   send_cancelled: '发送前检查未通过，未确认发出。请检查微信聊天和输入框后重新启动。',
   visual_evidence_invalid: '截图识别没有提供有效的聊天和输入区域，已停止。',
   visual_response_invalid:
@@ -55,10 +55,16 @@ const reasons: Record<string, string> = {
   windows_required: '个人微信前台模式目前支持 Windows。'
 }
 export default function PersonalWechatControls({ active }: { active: boolean }): React.JSX.Element {
-  const [target, setTarget] = useState('Q'),
+  const [target, setTarget] = useState(() => localStorage.getItem('personal-wechat-target') ?? ''),
     [status, setStatus] = useState<ForegroundStatus>(),
     [error, setError] = useState(''),
-    [busy, setBusy] = useState(false)
+    [busy, setBusy] = useState(false),
+    [resetBaseline, setResetBaseline] = useState(false),
+    [batchExpanded, setBatchExpanded] = useState(false),
+    [verified, setVerified] = useState<Record<string, boolean>>({})
+  useEffect(() => {
+    localStorage.setItem('personal-wechat-target', target)
+  }, [target])
   useEffect(() => {
     if (!active || !window.foregroundWechat) return
     let mounted = true,
@@ -93,11 +99,13 @@ export default function PersonalWechatControls({ active }: { active: boolean }):
         ? await window.foregroundWechat.start({
             target: target.trim(),
             foregroundConsent: true,
+            resetBaseline,
             connectionMode: currentChat ? 'current_chat' : 'search',
             ...(currentChat ? { currentChatSelected: true as const } : {})
           })
         : await window.foregroundWechat.pause()
       setStatus(ForegroundStatusSchema.parse(value))
+      if (start) setResetBaseline(false)
     } catch {
       setError('操作未确认，请查看微信并刷新运行状态。')
     } finally {
@@ -106,75 +114,86 @@ export default function PersonalWechatControls({ active }: { active: boolean }):
   }
   return (
     <>
-      <PersonalWechatBatchControls active={active} />
-      <details>
-        <summary>单联系人调试工具</summary>
-        <section className="card enterprise-readiness" aria-labelledby="personal-wechat-heading">
-          <h2 id="personal-wechat-heading" className="card-title">
-            个人微信前台自动回复
-          </h2>
-          <p className="enterprise-copy">
-            由本项目读取微信并回复指定联系人，使用主页选择的模型和已保存的回复规则。微信在前台时处理消息；切换到其他应用时等待，回到原聊天后重新校验并继续。
-          </p>
-          <label className="form-label" htmlFor="personal-wechat-target">
-            测试联系人备注名
-          </label>
+      <section className="card enterprise-readiness" aria-labelledby="personal-wechat-heading">
+        <h2 id="personal-wechat-heading" className="card-title">
+          个人微信前台自动回复
+        </h2>
+        <p className="enterprise-copy">
+          由本项目读取微信并回复指定联系人，使用主页选择的模型和已保存的回复规则。微信在前台时处理消息；切换到其他应用时等待，回到原聊天后重新校验并继续。
+        </p>
+        <label className="form-label" htmlFor="personal-wechat-target">
+          联系人准确备注名
+        </label>
+        <input
+          id="personal-wechat-target"
+          className="form-input"
+          value={target}
+          maxLength={128}
+          disabled={Boolean(running) || busy}
+          onChange={(event) => setTarget(event.target.value)}
+        />
+        <p className="form-hint">
+          首次启动以当前消息为起点；暂停或重启后，继续核对并处理尚未回复的新文字消息。请保持微信在前台，并将完整窗口放在主显示器内。
+        </p>
+        <p className="form-hint">
+          搜索不完整或有同名联系人时，请先在微信中打开你选定的聊天并清空草稿，再接入已打开的聊天。此操作确认你已选定该对象；项目仍会核对标题和单聊类型，验证通过后才开始监听。
+        </p>
+        <p role="status" aria-live="polite">
+          {status
+            ? status.state === 'running'
+              ? `等待 ${status.target} 的新消息`
+              : states[status.state]
+            : '正在读取状态'}
+          {status?.reason && status.reason !== 'none'
+            ? `：${reasons[status.reason] ?? reasons.read_failed}`
+            : ''}
+        </p>
+        <label className="form-hint">
           <input
-            id="personal-wechat-target"
-            className="form-input"
-            value={target}
-            maxLength={128}
+            type="checkbox"
+            checked={resetBaseline}
             disabled={Boolean(running) || busy}
-            onChange={(event) => setTarget(event.target.value)}
+            onChange={(event) => setResetBaseline(event.target.checked)}
           />
-          <p className="form-hint">
-            启动时会搜索并打开这个联系人，只回复启动后收到的新文字消息；已有历史消息不自动回复。截图模式只检查这个会话。
+          以当前消息重新接入（忽略之前未处理的消息；更换窗口、修改规则或人工接管后使用）
+        </label>
+        <div className="enterprise-runtime-actions">
+          <button
+            className="btn btn-primary"
+            disabled={!window.foregroundWechat || busy || Boolean(running) || !target.trim()}
+            onClick={() => void operate(true)}
+          >
+            {status?.state === 'connecting' ? '正在连接…' : '启动个人微信自动回复'}
+          </button>
+          <button
+            className="btn btn-secondary"
+            disabled={!window.foregroundWechat || busy || Boolean(running) || !target.trim()}
+            onClick={() => void operate(true, true)}
+          >
+            接入已打开的聊天
+          </button>
+          <button
+            className="btn btn-secondary"
+            disabled={!window.foregroundWechat || (!running && !busy)}
+            onClick={() => void operate(false)}
+          >
+            暂停个人微信自动回复
+          </button>
+        </div>
+        {error && (
+          <p className="enterprise-error" role="alert">
+            {error}
           </p>
-          <p className="form-hint">
-            搜索不完整或有同名联系人时，请先在微信中打开你选定的聊天并清空草稿，再接入已打开的聊天。此操作确认你已选定该对象；项目仍会核对标题和单聊类型，验证通过后才开始监听。
-          </p>
-          <p role="status" aria-live="polite">
-            {status
-              ? status.state === 'running'
-                ? `等待 ${status.target} 的新消息`
-                : states[status.state]
-              : '正在读取状态'}
-            {status?.reason && status.reason !== 'none'
-              ? `：${reasons[status.reason] ?? reasons.read_failed}`
-              : ''}
-          </p>
-          <div className="enterprise-runtime-actions">
-            <button
-              className="btn btn-primary"
-              disabled={!window.foregroundWechat || busy || Boolean(running) || !target.trim()}
-              onClick={() => void operate(true)}
-            >
-              {status?.state === 'connecting' ? '正在连接…' : '启动个人微信自动回复'}
-            </button>
-            <button
-              className="btn btn-secondary"
-              disabled={!window.foregroundWechat || busy || Boolean(running) || !target.trim()}
-              onClick={() => void operate(true, true)}
-            >
-              接入已打开的聊天
-            </button>
-            <button
-              className="btn btn-secondary"
-              disabled={!window.foregroundWechat || (!running && !busy)}
-              onClick={() => void operate(false)}
-            >
-              暂停个人微信自动回复
-            </button>
-          </div>
-          {error && (
-            <p className="enterprise-error" role="alert">
-              {error}
-            </p>
-          )}
-          {Boolean(status?.records.length) && (
-            <div aria-label="个人微信回复记录" style={{ marginTop: 16 }}>
-              <h3>回复记录</h3>
-              {status!.records.slice(0, 8).map((row) => (
+        )}
+        {Boolean(status?.records.length) && (
+          <div aria-label="个人微信回复记录" style={{ marginTop: 16 }}>
+            <h3>回复记录</h3>
+            {status!.records
+              .slice(
+                0,
+                Math.max(8, status!.records.filter((row) => row.state === 'unknown').length)
+              )
+              .map((row) => (
                 <article key={row.id} style={{ marginTop: 12, overflowWrap: 'anywhere' }}>
                   <strong>
                     {row.target} ·{' '}
@@ -186,11 +205,53 @@ export default function PersonalWechatControls({ active }: { active: boolean }):
                   </strong>
                   <p>收到：{row.question}</p>
                   <p>回复：{row.reply}</p>
+                  {row.state === 'unknown' && (
+                    <div>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(verified[row.id])}
+                          onChange={(event) =>
+                            setVerified((previous) => ({
+                              ...previous,
+                              [row.id]: event.target.checked
+                            }))
+                          }
+                        />
+                        我已在微信中核对这条回复
+                      </label>
+                      {(['sent', 'not_sent'] as const).map((state) => (
+                        <button
+                          key={state}
+                          className="btn btn-secondary btn-sm"
+                          disabled={busy || !verified[row.id]}
+                          onClick={() => {
+                            setBusy(true)
+                            setError('')
+                            void window.foregroundWechat
+                              .resolve({ id: row.id, state, verifiedInWechat: true })
+                              .then((value) => setStatus(ForegroundStatusSchema.parse(value)))
+                              .catch(() => setError('核对结果未保存，请刷新后重试。'))
+                              .finally(() => setBusy(false))
+                          }}
+                        >
+                          {state === 'sent' ? '确认已发送' : '确认未发送'}
+                        </button>
+                      ))}
+                      <p className="form-hint">保存后需要重新启动；该条消息不会自动重发。</p>
+                    </div>
+                  )}
                 </article>
               ))}
-            </div>
-          )}
-        </section>
+          </div>
+        )}
+      </section>
+      <details
+        style={{ marginTop: 16 }}
+        onToggle={(event) => setBatchExpanded(event.currentTarget.open)}
+      >
+        <summary>多联系人批量自动回复</summary>
+        {batchExpanded && <PersonalWechatBatchControls active={active} />}
       </details>
     </>
   )

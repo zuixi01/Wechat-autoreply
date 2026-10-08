@@ -63,9 +63,10 @@ function setup(guard = vi.fn(), withGuard = true) {
     ([channel]) => channel === 'learning-submission:receipts'
   )?.[1] as (event: IpcMainInvokeEvent, raw: unknown) => unknown
   // Model the serializable main/preload boundary; actual contextBridge is a desktop check.
-  electron.invoke.mockImplementation(async (_channel, input) =>
-    JSON.parse(JSON.stringify(handler(event, input)))
-  )
+  electron.invoke.mockImplementation(async (channel, input) => {
+    if (channel === 'features:advanced-enable') return undefined
+    return JSON.parse(JSON.stringify(handler(event, input)))
+  })
   return { read, guard, handler }
 }
 

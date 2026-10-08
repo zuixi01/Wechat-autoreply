@@ -1,0 +1,194 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createServer, type Server } from 'node:http'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { PNG } from 'pngjs'
+import type { ForegroundMessageSchema } from '../../src/shared/contracts/foreground-wechat'
+import type { z } from 'zod'
+
+const desktop = vi.hoisted(() => ({
+  input: '',
+  messages: [] as { direction: 'inbound' | 'outbound' | 'system'; text: string }[],
+  active: '71',
+  sends: 0,
+  echo: true,
+  beforeSend: undefined as undefined | (() => void)
+}))
+vi.mock('electron', () => ({ app: {} }))
+vi.mock('../../src/core/rpa/util', () => ({
+  getRobot: () => ({
+    getScreenSize: () => ({ width: 1920, height: 1080 }),
+    moveMouse: () => {},
+    mouseClick: () => {},
+    typeString: () => {
+      throw new Error('RobotJS Unicode input must not be used')
+    },
+    keyTap: (key: string) => {
+      if (key !== 'enter') throw new Error('unexpected_key')
+      desktop.beforeSend?.()
+      desktop.sends++
+      if (desktop.echo) desktop.messages.push({ direction: 'outbound', text: desktop.input })
+      desktop.input = ''
+    },
+    screen: {
+      capture: () => {
+        const image = new PNG({ width: 800, height: 600 })
+        image.data.fill(255)
+        // The framebuffer changes when messages/draft change, allowing the actual
+        // driver's pixel evidence checks to catch stale observations.
+        image.data[0] = desktop.messages.length
+        image.data[4] = desktop.input.length
+        return { width: 800, height: 600, bytesPerPixel: 4, byteWidth: 3200, image: image.data }
+      }
+    }
+  })
+}))
+import { ForegroundWechatDriver } from '../../src/main/services/foreground-wechat-driver'
+import { ForegroundWechatRuntime } from '../../src/core/agent/foreground-wechat'
+import { SqliteForegroundJournal } from '../../src/core/persistence/foreground-journal'
+
+const binding = {
+  id: '71',
+  pid: 123,
+  path: 'C:\\Tencent\\Weixin.exe',
+  startTicks: '123456',
+  bounds: { x: 0, y: 0, width: 800, height: 600 }
+}
+const windows = {
+  inspect: async () => ({
+    id: '00000000-0000-4000-8000-000000000000',
+    ok: true as const,
+    windows: [binding],
+    foreground: desktop.active
+  }),
+  focus: async () => {
+    desktop.active = '71'
+  },
+  typeText: async (window: typeof binding, text: string, signal: AbortSignal) => {
+    if (signal.aborted || desktop.active !== window.id) throw new Error('foreground_lost')
+    desktop.input = text
+  }
+}
+let server: Server, baseURL: string, directory: string, journal: SqliteForegroundJournal
+let runtime: ForegroundWechatRuntime | undefined
+let requests: { model: string; messages: { role: string; content: unknown }[] }[]
+beforeEach(async () => {
+  desktop.input = ''
+  desktop.messages = [{ direction: 'inbound', text: '历史消息' }]
+  desktop.active = '71'
+  desktop.sends = 0
+  desktop.echo = true
+  desktop.beforeSend = undefined
+  runtime = undefined
+  requests = []
+  directory = mkdtempSync(join(tmpdir(), 'personal-wechat-flow-'))
+  journal = new SqliteForegroundJournal(join(directory, 'journal.sqlite'))
+  server = createServer(async (request, response) => {
+    const chunks: Buffer[] = []
+    for await (const chunk of request) chunks.push(Buffer.from(chunk))
+    const body = JSON.parse(Buffer.concat(chunks).toString())
+    requests.push(body)
+    const content =
+      body.model === 'vision-fixture'
+        ? JSON.stringify({
+            contact: 'Q',
+            privateChat: true,
+            inputText: desktop.input,
+            messages: desktop.messages,
+            header: [0.4, 0.1, 0.5, 0.1],
+            history: [0.4, 0.2, 0.5, 0.4],
+            input: [0.4, 0.7, 0.5, 0.2]
+          })
+        : '已收到你的问题，我会尽快处理。'
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ choices: [{ message: { content } }] }))
+  })
+  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('fixture_address_invalid')
+  baseURL = `http://127.0.0.1:${address.port}/v1`
+})
+afterEach(async () => {
+  await runtime?.pause()
+  journal.close()
+  server.closeAllConnections()
+  await new Promise<void>((done) => server.close(() => done()))
+  rmSync(directory, { recursive: true, force: true })
+})
+function createRuntime(): ForegroundWechatRuntime {
+  const model = {
+    apiKey: 'fixture-key',
+    modelName: 'vision-fixture',
+    baseURL,
+    capabilities: ['text', 'vision']
+  }
+  return new ForegroundWechatRuntime(
+    new ForegroundWechatDriver(
+      () => ({
+        vision: model,
+        reply: { ...model, modelName: 'reply-fixture' },
+        rules: '专业、简洁地回复。',
+        revision: 'rules-v1'
+      }),
+      windows
+    ),
+    journal,
+    false,
+    (value) => journal.saveSingle(value)
+  )
+}
+const inbound = (text: string): z.infer<typeof ForegroundMessageSchema> => ({
+  direction: 'inbound',
+  text
+})
+describe('personal WeChat complete flow with synthetic desktop and loopback model API', () => {
+  it('reads, generates, validates, journals before Enter, confirms echo, and resumes after restart without duplicate send', async () => {
+    runtime = createRuntime()
+    expect((await runtime.start('Q', 'current_chat')).state).toBe('running')
+    expect(desktop.sends).toBe(0)
+    desktop.messages.push(inbound('什么时候可以处理？'))
+    desktop.beforeSend = () => expect(journal.unresolved()).toHaveLength(1)
+    await runtime.tick()
+    expect(journal.list().map((row) => row.state)).toEqual(['sent'])
+    expect(desktop.sends).toBe(1)
+    expect(requests.find((row) => row.model === 'reply-fixture')?.messages[0].content).toContain(
+      '专业、简洁地回复。'
+    )
+    await runtime.tick()
+    await runtime.pause()
+    journal.close()
+    journal = new SqliteForegroundJournal(join(directory, 'journal.sqlite'))
+    desktop.messages.push(inbound('谢谢，请再确认一次。'))
+    runtime = createRuntime()
+    expect(
+      (await runtime.start('Q', 'current_chat', undefined, journal.loadSingle('Q'))).state
+    ).toBe('running')
+    await runtime.tick()
+    await runtime.tick()
+    expect(desktop.sends).toBe(2)
+    expect(journal.list().map((row) => row.state)).toEqual(['sent', 'sent'])
+  }, 15000)
+  it('blocks an uncertain receipt across restart until explicit human reconciliation, then never replays that message', async () => {
+    runtime = createRuntime()
+    await runtime.start('Q', 'current_chat')
+    desktop.messages.push(inbound('这个问题需要核对。'))
+    desktop.echo = false
+    await runtime.tick()
+    expect(runtime.status().reason).toBe('send_unknown')
+    const row = journal.unresolved()[0]
+    runtime = createRuntime()
+    expect(
+      (await runtime.start('Q', 'current_chat', undefined, journal.loadSingle('Q'))).reason
+    ).toBe('send_unknown')
+    expect(() =>
+      journal.resolve({ id: row.id, state: 'not_sent', verifiedInWechat: false })
+    ).toThrow()
+    journal.resolve({ id: row.id, state: 'not_sent', verifiedInWechat: true })
+    expect(journal.loadSingle('Q')).toBeUndefined()
+    await runtime.start('Q', 'current_chat')
+    await runtime.tick()
+    expect(desktop.sends).toBe(1)
+    expect(journal.list()[0].state).toBe('not_sent')
+  }, 15000)
+})
