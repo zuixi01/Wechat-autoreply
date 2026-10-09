@@ -31,8 +31,34 @@ export interface ForegroundWindows {
   focus(binding: ForegroundWindow, signal: AbortSignal): Promise<void>
   typeText(binding: ForegroundWindow, text: string, signal: AbortSignal): Promise<void>
 }
+const liveBridges = new Set<ForegroundWindowBridge>()
+let quitHookInstalled = false
 /** The pinned helper types Unicode into the bound foreground window; it cannot press Enter. */
 export class ForegroundWindowBridge implements ForegroundWindows {
+  private child?: ChildProcessWithoutNullStreams
+  private queue: Promise<unknown> = Promise.resolve()
+  private idleTimer?: ReturnType<typeof setTimeout>
+  private closed = false
+  constructor() {
+    if (!quitHookInstalled) {
+      quitHookInstalled = true
+      app.once('will-quit', () => {
+        for (const bridge of liveBridges) bridge.close()
+      })
+    }
+  }
+  close(): void {
+    this.closed = true
+    this.release()
+  }
+  private release(): void {
+    clearTimeout(this.idleTimer)
+    const child = this.child
+    this.child = undefined
+    liveBridges.delete(this)
+    child?.stdin.end()
+    child?.kill()
+  }
   async inspect(signal: AbortSignal): Promise<z.infer<typeof StateSchema>> {
     return this.request('inspect', signal)
   }
@@ -51,85 +77,122 @@ export class ForegroundWindowBridge implements ForegroundWindows {
       throw new Error('text_invalid')
     await this.request('type', signal, binding, text)
   }
-  private async request(
+  private request(
+    command: 'inspect' | 'focus' | 'type',
+    signal: AbortSignal,
+    binding?: ForegroundWindow,
+    text?: string
+  ): Promise<z.infer<typeof StateSchema>> {
+    // One helper owns one serialized stream. Cancellation never leaves a typing
+    // request executing while another request starts on the same process.
+    const work = this.queue.then(() => this.exchange(command, signal, binding, text))
+    this.queue = work.catch(() => {})
+    return work
+  }
+  private async exchange(
     command: 'inspect' | 'focus' | 'type',
     signal: AbortSignal,
     binding?: ForegroundWindow,
     text?: string
   ): Promise<z.infer<typeof StateSchema>> {
     if (signal.aborted) throw new Error('cancelled')
+    if (this.closed) throw new Error('desktop_input_unavailable')
+    clearTimeout(this.idleTimer)
     const path = app.isPackaged
       ? join(process.resourcesPath, 'native', 'foreground', 'ForegroundWindow.exe')
       : join(app.getAppPath(), '.local', 'foreground-native', 'windows-x64', 'ForegroundWindow.exe')
-    if (
-      !__FOREGROUND_WINDOW_SHA256__ ||
-      createHash('sha256')
-        .update(await readFile(path))
-        .digest('hex') !== __FOREGROUND_WINDOW_SHA256__
-    )
-      throw new Error('desktop_input_unavailable')
+    if (!this.child) {
+      // Verify every new process, then keep using that pinned process. Its loaded
+      // executable does not depend on later replacements of the file on disk.
+      if (
+        !__FOREGROUND_WINDOW_SHA256__ ||
+        createHash('sha256')
+          .update(await readFile(path))
+          .digest('hex') !== __FOREGROUND_WINDOW_SHA256__
+      )
+        throw new Error('desktop_input_unavailable')
+      if (signal.aborted) throw new Error('cancelled')
+      const child = spawn(path, [], {
+        windowsHide: true,
+        stdio: 'pipe',
+        shell: false,
+        env: nativeChildEnvironment(process.env)
+      })
+      this.child = child
+      liveBridges.add(this)
+      child.stdout.setEncoding('utf8')
+      child.stderr.resume()
+      child.on('error', () => {
+        if (this.child === child) this.release()
+      })
+      child.on('exit', () => {
+        if (this.child === child) this.release()
+      })
+      child.stdin.on('error', () => {
+        if (this.child === child) this.release()
+      })
+    }
     if (signal.aborted) throw new Error('cancelled')
     const id = randomUUID()
     return new Promise((resolve, reject) => {
-      let child: ChildProcessWithoutNullStreams | undefined,
-        timer: ReturnType<typeof setTimeout> | undefined,
+      const child = this.child!
+      let timer: ReturnType<typeof setTimeout> | undefined,
         finished = false,
         buffer = ''
-      const finish = (error?: Error, value?: z.infer<typeof StateSchema>): void => {
+      const finish = (
+        error?: Error,
+        value?: z.infer<typeof StateSchema>,
+        validResponse = false
+      ): void => {
         if (finished) return
         finished = true
         clearTimeout(timer)
         signal.removeEventListener('abort', abort)
-        child?.stdin.end()
-        child?.kill()
+        child.stdout.removeListener('data', data)
+        child.removeListener('error', unavailable)
+        child.removeListener('exit', failed)
+        child.stdin.removeListener('error', failed)
+        if (error && !validResponse) this.release()
+        else this.idleTimer = setTimeout(() => this.release(), 30000)
         if (error) reject(error)
         else resolve(value!)
       }
       const abort = (): void => finish(new Error('cancelled'))
-      try {
-        child = spawn(path, [], {
-          windowsHide: true,
-          stdio: 'pipe',
-          shell: false,
-          env: nativeChildEnvironment(process.env)
-        })
-        child.stdout.setEncoding('utf8')
-        child.stderr.resume()
-        child.on('error', () => finish(new Error('desktop_input_unavailable')))
-        child.on('exit', () => {
-          if (!finished) finish(new Error('window_query_failed'))
-        })
-        child.stdin.on('error', () => finish(new Error('window_query_failed')))
-        child.stdout.on('data', (chunk: string) => {
-          buffer += chunk
-          if (buffer.length > 131072) {
-            finish(new Error('window_query_failed'))
+      const unavailable = (): void => finish(new Error('desktop_input_unavailable'))
+      const failed = (): void => finish(new Error('window_query_failed'))
+      const data = (chunk: string): void => {
+        buffer += chunk
+        if (buffer.length > 131072) return finish(new Error('window_query_failed'))
+        if (!buffer.includes('\n')) return
+        try {
+          if (buffer.slice(buffer.indexOf('\n') + 1).trim()) throw new Error()
+          const response = JSON.parse(buffer.slice(0, buffer.indexOf('\n')))
+          if (
+            response.id === id &&
+            response.ok === false &&
+            [
+              'window_changed',
+              'foreground_lost',
+              'text_invalid',
+              'input_failed',
+              'input_state_changed'
+            ].includes(response.error)
+          ) {
+            finish(new Error(response.error), undefined, true)
             return
           }
-          if (!buffer.includes('\n')) return
-          try {
-            const response = JSON.parse(buffer.slice(0, buffer.indexOf('\n')))
-            if (
-              response.id === id &&
-              response.ok === false &&
-              [
-                'window_changed',
-                'foreground_lost',
-                'text_invalid',
-                'input_failed',
-                'input_state_changed'
-              ].includes(response.error)
-            ) {
-              finish(new Error(response.error))
-              return
-            }
-            const result = StateSchema.parse(response)
-            if (result.id !== id) throw new Error()
-            finish(undefined, result)
-          } catch {
-            finish(new Error('window_query_failed'))
-          }
-        })
+          const result = StateSchema.parse(response)
+          if (result.id !== id) throw new Error()
+          finish(undefined, result)
+        } catch {
+          finish(new Error('window_query_failed'))
+        }
+      }
+      try {
+        child.on('error', unavailable)
+        child.on('exit', failed)
+        child.stdin.on('error', failed)
+        child.stdout.on('data', data)
         // Native typing paces complete Unicode characters. Allow that bounded
         // duration while retaining immediate cancellation and foreground checks.
         const timeoutMs = 5000 + (command === 'type' ? (text?.length ?? 0) * 40 : 0)

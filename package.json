@@ -101,7 +101,7 @@
     "build:win:installer:dev": "node scripts/build-windows-dev.mjs --installer",
     "build:mac": "electron-vite build && electron-builder --mac",
     "build:linux": "electron-vite build && electron-builder --linux",
-    "test:personal": "vitest run tests/unit/foreground-wechat.test.ts tests/unit/foreground-wechat-driver.test.ts tests/unit/foreground-journal.test.ts tests/unit/foreground-batch.test.ts tests/integration/personal-wechat-flow.test.ts",
+    "test:personal": "vitest run tests/unit/foreground-wechat.test.ts tests/unit/foreground-wechat-driver.test.ts tests/unit/foreground-window-bridge.test.ts tests/unit/foreground-bubbles.test.ts tests/unit/foreground-journal.test.ts tests/unit/foreground-batch.test.ts tests/integration/personal-wechat-flow.test.ts",
     "clean:artifacts": "tsx scripts/clean-artifacts.ts",
     "test:wechat": "node scripts/run-personal-wechat-test.mjs"
   },

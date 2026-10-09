@@ -42,7 +42,12 @@ export function registerForegroundWechatIpc(
       const driver = new ForegroundWechatDriver(() => configuration(target))
       return {
         connect: (_target, signal) => driver.connect(target, signal, 'current_chat', false),
-        read: (signal) => driver.read(signal),
+        metrics: () => driver.metrics(),
+        receiptText: () => driver.receiptText(),
+        receiptFingerprint: () => driver.receiptFingerprint(),
+        seed: (messages) => driver.seed(messages),
+        accept: (observation) => driver.accept(observation),
+        read: (signal, fresh) => driver.read(signal, fresh),
         generate: (observation, signal) => driver.generate(observation, signal),
         dispatch: (observation, text, signal) => driver.dispatch(observation, text, signal)
       }
@@ -71,7 +76,7 @@ export function registerForegroundWechatIpc(
       const status = await runtime.start(
         input.target,
         input.connectionMode,
-        undefined,
+        input.pendingPreview ? { count: 1, preview: input.pendingPreview } : undefined,
         journal.loadSingle(input.target)
       )
       if (status.state === 'paused' && status.reason !== 'user_pause') {

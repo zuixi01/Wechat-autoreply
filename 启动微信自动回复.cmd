@@ -1,0 +1,4 @@
+@echo off
+set "AUTOREPLY_LAUNCH_ROOT=%~dp0"
+powershell.exe -NoProfile -Command "$ErrorActionPreference='Stop'; $root=$env:AUTOREPLY_LAUNCH_ROOT; $latest=Get-Content -LiteralPath (Join-Path $root '.local/reports/windows-dev-build/latest.json') -Raw | ConvertFrom-Json; if ($latest.id -notmatch '^[a-f0-9-]{36}$') { throw 'Invalid build metadata' }; $report=Get-Content -LiteralPath (Join-Path $root ('.local/reports/windows-dev-build/'+$latest.id+'/result.json')) -Raw | ConvertFrom-Json; if (-not $report.passed) { throw 'Build incomplete' }; $exe=Join-Path $root ('dist/windows-dev-'+$latest.id+'/win-unpacked/AutoReply.exe'); if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Build missing: run npm run build:win:dev first' }; Start-Process -FilePath $exe -WorkingDirectory (Split-Path -LiteralPath $exe)"
+if errorlevel 1 pause

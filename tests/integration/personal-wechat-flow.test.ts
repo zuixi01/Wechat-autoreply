@@ -37,8 +37,8 @@ vi.mock('../../src/core/rpa/util', () => ({
         image.data.fill(255)
         // The framebuffer changes when messages/draft change, allowing the actual
         // driver's pixel evidence checks to catch stale observations.
-        image.data[0] = desktop.messages.length
-        image.data[4] = desktop.input.length
+        image.data[(200 * 800 + 400) * 4] = desktop.messages.length
+        image.data[(470 * 800 + 400) * 4] = desktop.input.length
         return { width: 800, height: 600, bytesPerPixel: 4, byteWidth: 3200, image: image.data }
       }
     }
@@ -73,6 +73,7 @@ const windows = {
 let server: Server, baseURL: string, directory: string, journal: SqliteForegroundJournal
 let runtime: ForegroundWechatRuntime | undefined
 let requests: { model: string; messages: { role: string; content: unknown }[] }[]
+let replyFailures = 0
 beforeEach(async () => {
   desktop.input = ''
   desktop.messages = [{ direction: 'inbound', text: '历史消息' }]
@@ -82,6 +83,7 @@ beforeEach(async () => {
   desktop.beforeSend = undefined
   runtime = undefined
   requests = []
+  replyFailures = 0
   directory = mkdtempSync(join(tmpdir(), 'personal-wechat-flow-'))
   journal = new SqliteForegroundJournal(join(directory, 'journal.sqlite'))
   server = createServer(async (request, response) => {
@@ -89,6 +91,12 @@ beforeEach(async () => {
     for await (const chunk of request) chunks.push(Buffer.from(chunk))
     const body = JSON.parse(Buffer.concat(chunks).toString())
     requests.push(body)
+    if (body.model === 'reply-fixture' && replyFailures > 0) {
+      replyFailures--
+      response.writeHead(503)
+      response.end()
+      return
+    }
     const content =
       body.model === 'vision-fixture'
         ? JSON.stringify({
@@ -143,6 +151,40 @@ const inbound = (text: string): z.infer<typeof ForegroundMessageSchema> => ({
   text
 })
 describe('personal WeChat complete flow with synthetic desktop and loopback model API', () => {
+  it('sends five consecutive replies, recovers a provider outage and foreground switch, and performs no idle model polling', async () => {
+    runtime = createRuntime()
+    await runtime.start('Q', 'current_chat')
+    const initialRequests = requests.length
+    for (let idle = 0; idle < 20; idle++) await runtime.tick()
+    expect(requests).toHaveLength(initialRequests)
+    for (let round = 0; round < 5; round++) {
+      desktop.messages.push(inbound(`连续验收第${round + 1}条`))
+      if (round === 1) {
+        replyFailures = 1
+        await runtime.tick()
+        expect(runtime.status().state).toBe('recovering')
+        expect(desktop.sends).toBe(round)
+      }
+      if (round === 2) {
+        desktop.active = '99'
+        await runtime.tick()
+        expect(runtime.status().state).toBe('waiting_foreground')
+        desktop.active = '71'
+      }
+      await runtime.tick()
+      await runtime.tick()
+      expect(runtime.status().state).toBe('running')
+      expect(desktop.sends).toBe(round + 1)
+      expect(journal.unresolved()).toHaveLength(0)
+    }
+    expect(journal.list().map((row) => row.state)).toEqual(Array(5).fill('sent'))
+    expect(new Set(journal.list().map((row) => row.id)).size).toBe(5)
+    const beforeIdle = requests.length
+    for (let idle = 0; idle < 20; idle++) await runtime.tick()
+    expect(requests).toHaveLength(beforeIdle)
+    expect(requests.filter((row) => row.model === 'vision-fixture').length).toBeLessThanOrEqual(18)
+    expect(runtime.status().lastReplyDurationMs).toBeGreaterThan(0)
+  }, 30000)
   it('reads, generates, validates, journals before Enter, confirms echo, and resumes after restart without duplicate send', async () => {
     runtime = createRuntime()
     expect((await runtime.start('Q', 'current_chat')).state).toBe('running')

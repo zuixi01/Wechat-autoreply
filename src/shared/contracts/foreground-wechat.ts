@@ -3,7 +3,11 @@ import type { BatchStatus } from './foreground-batch'
 
 export const ForegroundMessageSchema = z.strictObject({
   direction: z.enum(['inbound', 'outbound', 'system']),
-  text: z.string().max(4096)
+  text: z.string().max(4096),
+  pixelFingerprint: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional()
 })
 export const ForegroundObservationSchema = z.strictObject({
   windowToken: z.string().min(1).max(256),
@@ -24,6 +28,10 @@ export const ForegroundRecordSchema = z.strictObject({
 export const ForegroundCheckpointSchema = z.strictObject({
   baseline: ForegroundObservationSchema,
   ownEcho: z.string().max(4096).optional(),
+  ownEchoFingerprint: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
   pending: z.boolean()
 })
 export type ForegroundCheckpoint = z.infer<typeof ForegroundCheckpointSchema>
@@ -32,18 +40,30 @@ export const ForegroundResolutionSchema = z.strictObject({
   state: z.enum(['sent', 'not_sent']),
   verifiedInWechat: z.literal(true)
 })
+export const ForegroundMetricsSchema = z.strictObject({
+  visionRequests: z.number().int().nonnegative(),
+  cacheHits: z.number().int().nonnegative(),
+  lastVisionMs: z.number().nonnegative().optional(),
+  lastGenerationMs: z.number().nonnegative().optional()
+})
+export type ForegroundMetrics = z.infer<typeof ForegroundMetricsSchema>
 export const ForegroundStatusSchema = z.strictObject({
   state: z.enum([
     'idle',
     'connecting',
     'running',
     'waiting_foreground',
+    'recovering',
     'generating',
     'sending',
     'paused'
   ]),
   target: z.string().max(128),
   reason: z.string().max(128),
+  recoveryAttempts: z.number().int().nonnegative().optional(),
+  lastReplyDurationMs: z.number().nonnegative().optional(),
+  nextRetryAt: z.number().nonnegative().optional(),
+  performance: ForegroundMetricsSchema.optional(),
   records: z.array(ForegroundRecordSchema).max(50)
 })
 export const ForegroundStartSchema = z
@@ -52,14 +72,40 @@ export const ForegroundStartSchema = z
     foregroundConsent: z.literal(true),
     connectionMode: z.enum(['search', 'current_chat']).optional(),
     currentChatSelected: z.literal(true).optional(),
-    resetBaseline: z.boolean().optional()
+    resetBaseline: z.boolean().optional(),
+    pendingPreview: z.string().trim().min(1).max(4096).optional()
   })
+  .refine(
+    (input) =>
+      !input.pendingPreview ||
+      (input.resetBaseline === true && input.connectionMode === 'current_chat'),
+    { message: 'pending_preview_requires_current_chat_reset', path: ['pendingPreview'] }
+  )
   .refine(
     (input) => input.connectionMode !== 'current_chat' || input.currentChatSelected === true,
     { message: 'current_chat_selection_required', path: ['currentChatSelected'] }
   )
 export type ForegroundConnectionMode = 'search' | 'current_chat'
 export type ForegroundObservation = z.infer<typeof ForegroundObservationSchema>
+/** OCR may vary compatibility punctuation and spacing around it after scrolling.
+ * Word spacing and every other character remain significant. Exact pixel matches
+ * retain the already verified message even if a later OCR transcription varies. */
+export function sameForegroundMessages(
+  a: ForegroundObservation['messages'],
+  b: ForegroundObservation['messages']
+): boolean {
+  const canonical = (text: string): string =>
+    text.normalize('NFKC').replace(/\s*([:;,!?。])\s*/g, '$1')
+  return (
+    a.length === b.length &&
+    a.every(
+      (message, index) =>
+        message.direction === b[index].direction &&
+        ((message.pixelFingerprint && message.pixelFingerprint === b[index].pixelFingerprint) ||
+          canonical(message.text) === canonical(b[index].text))
+    )
+  )
+}
 export type ForegroundRecord = z.infer<typeof ForegroundRecordSchema>
 export type ForegroundStatus = z.infer<typeof ForegroundStatusSchema>
 export interface ForegroundDesktopApi {

@@ -245,7 +245,8 @@ export class ForegroundBatchRuntime {
         return
       }
       if (status.state === 'paused') this.issues.set(row.name, status.reason)
-      if (status.state === 'running' && session.hasPending()) return
+      if (status.state === 'recovering' || (status.state === 'running' && session.hasPending()))
+        return
       this.queue.shift()
     } catch (error) {
       if (signal.aborted) return

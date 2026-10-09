@@ -10,6 +10,7 @@ const states: Record<ForegroundStatus['state'], string> = {
   connecting: '正在连接微信，请将微信切到前台',
   running: '等待新消息',
   waiting_foreground: '等待微信回到前台',
+  recovering: '短暂故障，正在自动恢复',
   generating: '正在生成回复',
   sending: '正在发送并核对回显',
   paused: '已暂停'
@@ -23,6 +24,7 @@ const reasons: Record<string, string> = {
   model_not_configured: '请先在模型配置中填写密钥，并在主页选择视觉模型和回复模型。',
   vision_not_configured: '当前视觉模型不支持截图，请在主页选择支持图片的模型。',
   model_failed: '模型调用失败或超时，请在模型配置中测试连接。',
+  model_busy: '模型接口繁忙，正在等待重试。',
   model_network_failed:
     '无法连接模型接口，连接可能被关闭或重置。请在模型配置中测试连接，并检查当前中转站地址和网络。尚未自动发送回复。',
   model_timeout: '模型请求超时，请在模型配置中测试连接后重新启动。',
@@ -90,7 +92,9 @@ export default function PersonalWechatControls({ active }: { active: boolean }):
   }, [active])
   const running =
     status &&
-    ['connecting', 'running', 'waiting_foreground', 'generating', 'sending'].includes(status.state)
+    ['connecting', 'running', 'waiting_foreground', 'recovering', 'generating', 'sending'].includes(
+      status.state
+    )
   const operate = async (start: boolean, currentChat = false): Promise<void> => {
     setBusy(true)
     setError('')
@@ -144,10 +148,27 @@ export default function PersonalWechatControls({ active }: { active: boolean }):
               ? `等待 ${status.target} 的新消息`
               : states[status.state]
             : '正在读取状态'}
-          {status?.reason && status.reason !== 'none'
-            ? `：${reasons[status.reason] ?? reasons.read_failed}`
-            : ''}
+          {status?.state === 'recovering'
+            ? `：第 ${status.recoveryAttempts} 次重试，恢复后会继续核对尚未回复的消息。`
+            : status?.reason && status.reason !== 'none'
+              ? `：${reasons[status.reason] ?? reasons.read_failed}`
+              : ''}
         </p>
+        {status?.lastReplyDurationMs !== undefined && (
+          <p className="form-hint">
+            上一条回复从识别新消息到确认发送用时 {(status.lastReplyDurationMs / 1000).toFixed(1)}{' '}
+            秒。
+          </p>
+        )}
+        {status?.performance?.lastVisionMs !== undefined && (
+          <p className="form-hint">
+            最近一次截图识别 {(status.performance.lastVisionMs / 1000).toFixed(1)} 秒
+            {status.performance.lastGenerationMs !== undefined
+              ? `，文字生成 ${(status.performance.lastGenerationMs / 1000).toFixed(1)} 秒`
+              : ''}
+            。画面未变化时直接复用已核对的结果。
+          </p>
+        )}
         <label className="form-hint">
           <input
             type="checkbox"
