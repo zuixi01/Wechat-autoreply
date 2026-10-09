@@ -7,6 +7,7 @@ if (process.platform === 'win32') {
   const files = [
     'native/ForegroundWindow/Program.cs',
     'native/ForegroundWindow/UnicodeInput.cs',
+    'native/ForegroundWindow/ClipboardInput.cs',
     'native/ForegroundWindow/ForegroundWindow.csproj'
   ]
   let stale = true

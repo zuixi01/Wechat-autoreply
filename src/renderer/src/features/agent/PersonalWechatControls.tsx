@@ -52,6 +52,17 @@ const reasons: Record<string, string> = {
   send_unknown: '发送结果无法确认，已停止且不会重发。请打开微信核对下方记录，再明确标记发送结果。',
   checkpoint_invalid: '恢复记录不完整，请核对微信后选择“以当前消息重新接入”。',
   send_cancelled: '发送前检查未通过，未确认发出。请检查微信聊天和输入框后重新启动。',
+  send_screen_changed: '发送前画面发生变化，尚未发送；输入前的变化会重新读取后继续。',
+  send_context_changed: '输入期间聊天内容或窗口发生变化，已保留草稿并停止发送。',
+  send_context_invalid: '发送对象或配置核对未通过，尚未输入。',
+  send_draft_mismatch: '微信草稿与生成文字不一致，已停止发送，请核对草稿。',
+  send_echo_unverified: '无法确认新增回复气泡，已停止且不会重复发送。',
+  clipboard_unavailable:
+    '剪贴板暂不可用或当前格式无法安全保留，未按发送键。请核对微信草稿后重新接入。',
+  clipboard_state_changed: '操作期间剪贴板被其他操作更改，已停止且不会覆盖新内容。',
+  editor_text_unavailable: '无法从微信编辑框读回完整文字，未按下发送键。',
+  input_failed: '输入操作未完成，未按下发送键，请核对微信草稿。',
+  input_state_changed: '输入焦点或按键状态已变化，未按下发送键。',
   visual_evidence_invalid: '截图识别没有提供有效的聊天和输入区域，已停止。',
   visual_response_invalid:
     '视觉模型连续两次返回了不符合读取格式的结果，已暂停；请检查视觉模型后重新接入聊天。',
@@ -228,6 +239,9 @@ export default function PersonalWechatControls({ active }: { active: boolean }):
                   </strong>
                   <p>收到：{row.question}</p>
                   <p>回复：{row.reply}</p>
+                  {row.failureReason && (
+                    <p>原因：{reasons[row.failureReason] ?? row.failureReason}</p>
+                  )}
                   {row.state === 'unknown' && (
                     <div>
                       <label>

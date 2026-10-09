@@ -5,12 +5,14 @@ import {
   type ForegroundObservation,
   type ForegroundRecord,
   type ForegroundStatus,
+  type ForegroundDispatchFailure,
   type ForegroundConnectionMode,
   type ForegroundCheckpoint
 } from '../../shared/contracts/foreground-wechat'
 import { hashContext } from '../reply/hashes'
 
 export interface ForegroundDriver {
+  dispatchFailure?(): ForegroundDispatchFailure | undefined
   metrics?(): ForegroundStatus['performance']
   accept?(observation: ForegroundObservation): void
   receiptText?(): string | undefined
@@ -18,7 +20,11 @@ export interface ForegroundDriver {
   seed?(messages: ForegroundObservation['messages']): void
   connect(target: string, signal: AbortSignal, mode?: ForegroundConnectionMode): Promise<void>
   read(signal: AbortSignal, fresh?: boolean): Promise<ForegroundObservation>
-  generate(observation: ForegroundObservation, signal: AbortSignal): Promise<string | null>
+  generate(
+    observation: ForegroundObservation,
+    signal: AbortSignal,
+    incoming?: ForegroundObservation['messages']
+  ): Promise<string | null>
   dispatch(
     observation: ForegroundObservation,
     text: string,
@@ -286,7 +292,7 @@ export class ForegroundWechatRuntime {
       this.state = 'generating'
       this.pendingWork = true
       this.changed()
-      const reply = await this.driver.generate(next, signal)
+      const reply = await this.driver.generate(next, signal, additions)
       if (signal.aborted) return
       if (!reply?.trim()) {
         this.baseline = next
@@ -327,16 +333,29 @@ export class ForegroundWechatRuntime {
       } catch {
         /* Unknown never authorizes replay. */
       }
-      this.journal.save({ ...record, state: outcome })
-      this.baseline = next
+      const failure = outcome === 'sent' ? undefined : this.driver.dispatchFailure?.()
+      this.journal.save({ ...record, state: outcome, ...failure })
       if (outcome === 'unknown') {
         this.stopWith('send_unknown')
         return
       }
       if (outcome === 'not_sent') {
-        if (!signal.aborted) this.stopWith('send_cancelled')
+        if (!signal.aborted) {
+          if (
+            failure?.failureStage === 'before_input' &&
+            ['send_screen_changed', 'foreground_lost', 'window_query_failed'].includes(
+              failure.failureReason ?? ''
+            ) &&
+            this.recoveryAttempts < 3
+          ) {
+            this.recoveryAttempts++
+            this.state = 'recovering'
+            this.reason = failure.failureReason!
+          } else this.stopWith(failure?.failureReason ?? 'send_cancelled')
+        }
         return
       }
+      this.baseline = next
       this.ownEcho = this.driver.receiptText?.() ?? record.reply
       this.ownEchoFingerprint = this.driver.receiptFingerprint?.()
       this.pendingWork = false

@@ -11,8 +11,13 @@ internal struct GuiThreadInfo {
  public nint Active,Focus,Capture,MenuOwner,MoveSize,Caret;
  public CaretRect CaretBounds;
 }
+[StructLayout(LayoutKind.Explicit,Size=40)]
+internal struct KeyboardInput {
+ [FieldOffset(0)] public uint Type;
+ [FieldOffset(8)] public ushort Key;
+ [FieldOffset(12)] public uint Flags;
+}
 internal static class UnicodeInput {
- internal const int CharacterDelayMs=30;
  internal static void Validate(string? text) {
   if(text==null || text.Length is <1 or >4096) throw new Exception("text_invalid");
   for(var i=0;i<text.Length;i++) {

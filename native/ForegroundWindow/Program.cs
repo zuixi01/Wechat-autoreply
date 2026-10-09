@@ -22,8 +22,16 @@ internal static class Program {
  [DllImport("user32.dll",SetLastError=true)] static extern bool GetGUIThreadInfo(uint thread,ref GuiThreadInfo info);
  [DllImport("user32.dll")] static extern nint GetAncestor(nint window,uint flags);
  [DllImport("user32.dll")] static extern bool IsWindowUnicode(nint window);
- [DllImport("user32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern nint SendMessageTimeoutW(nint window,uint message,nuint character,nint parameter,uint flags,uint timeout,out nuint result);
  [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+ [DllImport("user32.dll",SetLastError=true)] static extern uint SendInput(uint count,KeyboardInput[] inputs,int size);
+ static void Shortcut(int key,bool control,Action guard) {
+  guard();
+  if(new[]{0x10,0x11,0x12,0x5B,0x5C}.Any(value=>(GetAsyncKeyState(value)&0x8000)!=0)) throw new Exception("input_state_changed");
+  var keys=control?new[]{(0x11,false),(key,false),(key,true),(0x11,true)}:new[]{(key,false),(key,true)};
+  var inputs=keys.Select(value=>new KeyboardInput{Type=1,Key=(ushort)value.Item1,Flags=value.Item2?2u:0u}).ToArray();
+  if(SendInput((uint)inputs.Length,inputs,Marshal.SizeOf<KeyboardInput>())!=inputs.Length) throw new Exception("input_failed");
+  ClipboardInput.Wait(25);guard();
+ }
  static readonly JsonSerializerOptions Json=new(){PropertyNamingPolicy=JsonNamingPolicy.CamelCase,UnmappedMemberHandling=System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow};
  static string Foreground()=>GetForegroundWindow().ToInt64().ToString();
  static nint Editor(nint handle,int pid) {
@@ -61,32 +69,29 @@ internal static class Program {
     if(line.Length>65536) throw new Exception("request_invalid");
     using var document=JsonDocument.Parse(line);var root=document.RootElement;id=root.GetProperty("id").GetString();if(!Guid.TryParse(id,out _)) throw new Exception("request_invalid");
     var command=root.GetProperty("command").GetString();var windows=Windows();
-    if(command is "focus" or "type") {
+    string? editorText=null;
+    if(command is "focus" or "type" or "read_editor") {
      var expected=JsonSerializer.Deserialize<Binding>(root.GetProperty("binding").GetRawText(),Json);
      var selected=windows.SingleOrDefault(w=>w==expected);if(selected==null) throw new Exception("window_changed");
      var handle=(nint)long.Parse(selected.Id);
      if(command=="focus") {
       if(IsIconic(handle)) ShowWindow(handle,9);SetForegroundWindow(handle);
      } else {
-      var text=root.GetProperty("text").GetString();UnicodeInput.Validate(text);
+      var text=command=="type"?root.GetProperty("text").GetString():null;if(text!=null) UnicodeInput.Validate(text);
       if(nint.Size!=8 || Marshal.SizeOf<GuiThreadInfo>()!=72) throw new Exception("input_failed");
       var editor=Editor(handle,selected.Pid);
-      // WM_CHAR supplies UTF16 directly, avoiding VK_PACKET/IME conversion of
-      // fullwidth punctuation. Only the bound foreground editor is eligible.
-      // https://learn.microsoft.com/windows/win32/inputdev/wm-char
-      foreach(var characters in UnicodeInput.Characters(text!)) {
+      void Guard() {
+       if(!Windows().Any(value=>value==selected)) throw new Exception("window_changed");
        if(Editor(handle,selected.Pid)!=editor) throw new Exception("input_state_changed");
-       if(new[]{0x10,0x11,0x12,0x5B,0x5C}.Any(key=>(GetAsyncKeyState(key)&0x8000)!=0)) throw new Exception("input_state_changed");
-       foreach(var character in characters) {
-        if(Editor(handle,selected.Pid)!=editor) throw new Exception("input_state_changed");
-        if(SendMessageTimeoutW(editor,0x0102,character,1,3,500,out _)==0) throw new Exception("input_failed");
-       }
-       Thread.Sleep(UnicodeInput.CharacterDelayMs);
       }
+      using var transfer=new ClipboardInput();
+      editorText=command=="type"
+       ?transfer.Paste(text!,selected.Pid,(key,control)=>Shortcut(key,control,Guard),Guard)
+       :transfer.CopyEditor(selected.Pid,(key,control)=>Shortcut(key,control,Guard),Guard);
      }
     } else if(command!="inspect") throw new Exception("request_invalid");
-    Console.WriteLine(JsonSerializer.Serialize(new {id,ok=true,windows=Windows(),foreground=Foreground()},Json));
-   } catch(Exception e) {var code=e.Message is "request_invalid" or "window_changed" or "foreground_lost" or "text_invalid" or "input_failed" or "input_state_changed"?e.Message:"window_query_failed";Console.WriteLine(JsonSerializer.Serialize(new{id,ok=false,error=code},Json));}
+    Console.WriteLine(JsonSerializer.Serialize(new {id,ok=true,windows=Windows(),foreground=Foreground(),editorText},Json));
+   } catch(Exception e) {var code=e.Message is "request_invalid" or "window_changed" or "foreground_lost" or "text_invalid" or "input_failed" or "input_state_changed" or "clipboard_unavailable" or "clipboard_state_changed" or "editor_text_unavailable"?e.Message:"window_query_failed";Console.WriteLine(JsonSerializer.Serialize(new{id,ok=false,error=code},Json));}
    Console.Out.Flush();
   }
  }

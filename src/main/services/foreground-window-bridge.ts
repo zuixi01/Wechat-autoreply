@@ -23,17 +23,19 @@ const StateSchema = z.strictObject({
   id: z.string().uuid(),
   ok: z.literal(true),
   windows: z.array(ForegroundWindowSchema).max(16),
-  foreground: z.string().regex(/^\d+$/)
+  foreground: z.string().regex(/^\d+$/),
+  editorText: z.string().max(4096).nullable().optional()
 })
 export type ForegroundWindow = z.infer<typeof ForegroundWindowSchema>
 export interface ForegroundWindows {
   inspect(signal: AbortSignal): Promise<z.infer<typeof StateSchema>>
   focus(binding: ForegroundWindow, signal: AbortSignal): Promise<void>
-  typeText(binding: ForegroundWindow, text: string, signal: AbortSignal): Promise<void>
+  typeText(binding: ForegroundWindow, text: string, signal: AbortSignal): Promise<void | string>
+  readEditorText?(binding: ForegroundWindow, signal: AbortSignal): Promise<string>
 }
 const liveBridges = new Set<ForegroundWindowBridge>()
 let quitHookInstalled = false
-/** The pinned helper types Unicode into the bound foreground window; it cannot press Enter. */
+/** The pinned helper pastes and reads back Unicode in the bound editor; never Enter. */
 export class ForegroundWindowBridge implements ForegroundWindows {
   private child?: ChildProcessWithoutNullStreams
   private queue: Promise<unknown> = Promise.resolve()
@@ -65,7 +67,7 @@ export class ForegroundWindowBridge implements ForegroundWindows {
   async focus(binding: ForegroundWindow, signal: AbortSignal): Promise<void> {
     await this.request('focus', signal, binding)
   }
-  async typeText(binding: ForegroundWindow, text: string, signal: AbortSignal): Promise<void> {
+  async typeText(binding: ForegroundWindow, text: string, signal: AbortSignal): Promise<string> {
     if (
       !text ||
       text.length > 4096 ||
@@ -75,10 +77,17 @@ export class ForegroundWindowBridge implements ForegroundWindows {
       Buffer.from(text, 'utf8').toString('utf8') !== text
     )
       throw new Error('text_invalid')
-    await this.request('type', signal, binding, text)
+    const response = await this.request('type', signal, binding, text)
+    if (typeof response.editorText !== 'string') throw new Error('editor_text_unavailable')
+    return response.editorText
+  }
+  async readEditorText(binding: ForegroundWindow, signal: AbortSignal): Promise<string> {
+    const response = await this.request('read_editor', signal, binding)
+    if (typeof response.editorText !== 'string') throw new Error('editor_text_unavailable')
+    return response.editorText
   }
   private request(
-    command: 'inspect' | 'focus' | 'type',
+    command: 'inspect' | 'focus' | 'type' | 'read_editor',
     signal: AbortSignal,
     binding?: ForegroundWindow,
     text?: string
@@ -90,7 +99,7 @@ export class ForegroundWindowBridge implements ForegroundWindows {
     return work
   }
   private async exchange(
-    command: 'inspect' | 'focus' | 'type',
+    command: 'inspect' | 'focus' | 'type' | 'read_editor',
     signal: AbortSignal,
     binding?: ForegroundWindow,
     text?: string
@@ -138,7 +147,9 @@ export class ForegroundWindowBridge implements ForegroundWindows {
       const child = this.child!
       let timer: ReturnType<typeof setTimeout> | undefined,
         finished = false,
-        buffer = ''
+        buffer = '',
+        requestWritten = false,
+        cancelledAfterWrite = false
       const finish = (
         error?: Error,
         value?: z.infer<typeof StateSchema>,
@@ -146,6 +157,7 @@ export class ForegroundWindowBridge implements ForegroundWindows {
       ): void => {
         if (finished) return
         finished = true
+        if (cancelledAfterWrite) error = new Error('cancelled')
         clearTimeout(timer)
         signal.removeEventListener('abort', abort)
         child.stdout.removeListener('data', data)
@@ -157,7 +169,12 @@ export class ForegroundWindowBridge implements ForegroundWindows {
         if (error) reject(error)
         else resolve(value!)
       }
-      const abort = (): void => finish(new Error('cancelled'))
+      const abort = (): void => {
+        // An active paste must finish restoring the clipboard. The helper cannot
+        // press Enter; the runtime will discard its result after cancellation.
+        if (['type', 'read_editor'].includes(command) && requestWritten) cancelledAfterWrite = true
+        else finish(new Error('cancelled'))
+      }
       const unavailable = (): void => finish(new Error('desktop_input_unavailable'))
       const failed = (): void => finish(new Error('window_query_failed'))
       const data = (chunk: string): void => {
@@ -175,7 +192,10 @@ export class ForegroundWindowBridge implements ForegroundWindows {
               'foreground_lost',
               'text_invalid',
               'input_failed',
-              'input_state_changed'
+              'input_state_changed',
+              'clipboard_unavailable',
+              'clipboard_state_changed',
+              'editor_text_unavailable'
             ].includes(response.error)
           ) {
             finish(new Error(response.error), undefined, true)
@@ -183,7 +203,7 @@ export class ForegroundWindowBridge implements ForegroundWindows {
           }
           const result = StateSchema.parse(response)
           if (result.id !== id) throw new Error()
-          finish(undefined, result)
+          finish(undefined, result, true)
         } catch {
           finish(new Error('window_query_failed'))
         }
@@ -193,15 +213,16 @@ export class ForegroundWindowBridge implements ForegroundWindows {
         child.on('exit', failed)
         child.stdin.on('error', failed)
         child.stdout.on('data', data)
-        // Native typing paces complete Unicode characters. Allow that bounded
-        // duration while retaining immediate cancellation and foreground checks.
-        const timeoutMs = 5000 + (command === 'type' ? (text?.length ?? 0) * 40 : 0)
+        // A clipboard operation restores its snapshot before cancellation settles.
+        // No character-by-character delay is needed for a single Unicode paste.
+        const timeoutMs = 5000
         timer = setTimeout(() => finish(new Error('window_query_failed')), timeoutMs)
         signal.addEventListener('abort', abort, { once: true })
         if (signal.aborted) {
           abort()
           return
         }
+        requestWritten = true
         child.stdin.write(
           JSON.stringify({
             id,

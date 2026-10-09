@@ -8,6 +8,7 @@ const f = vi.hoisted(() => ({
   png: Buffer.alloc(0) as Buffer<ArrayBufferLike>,
   tap: vi.fn(),
   type: vi.fn(),
+  readEditor: vi.fn(),
   move: vi.fn(),
   click: vi.fn(),
   scroll: vi.fn(),
@@ -43,8 +44,9 @@ const windows = {
   typeText: async (binding: typeof nativeWindow, text: string, signal: AbortSignal) => {
     if (signal.aborted || String(f.active) !== binding.id) throw new Error('foreground_lost')
     changeScreen(400, 470)
-    f.type(text)
-  }
+    return f.type(text) as void | string
+  },
+  readEditorText: async () => f.readEditor() as Promise<string>
 }
 vi.mock('electron', () => ({
   desktopCapturer: {
@@ -182,6 +184,104 @@ async function connected() {
   return { driver, signal, observation }
 }
 describe('project foreground sender boundaries', () => {
+  it('revalidates focus-related chat pixels before typing and retains all send checks', async () => {
+    const t = await connected()
+    const text = '确认后的回复'
+    f.click.mockImplementationOnce(() => changeScreen(400, 200))
+    f.type.mockReturnValueOnce(text)
+    f.readEditor.mockResolvedValueOnce(text)
+    f.fetch.mockResolvedValueOnce(response(visual())).mockResolvedValueOnce(
+      response(
+        visual('', [
+          { direction: 'inbound', text: '问题' },
+          { direction: 'outbound', text }
+        ])
+      )
+    )
+    expect(await advance(t.driver.dispatch(t.observation, text, t.signal))).toBe('sent')
+    expect(f.type).toHaveBeenCalledTimes(1)
+    expect(f.tap.mock.calls).toEqual([['enter']])
+  })
+  it('re-reads the complete screen during recovery and replaces poisoned bubble OCR', async () => {
+    const t = await connected()
+    const png = PNG.sync.read(f.png)
+    for (const y of [160, 230]) {
+      for (let row = y; row < y + 44; row++)
+        for (let x = 400; x < 550; x++) png.data.set([236, 236, 238, 255], (row * 800 + x) * 4)
+      for (let dx = 0; dx < 8; dx++)
+        for (let row = y + 22 - dx; row <= y + 22 + dx; row++)
+          png.data.set([236, 236, 238, 255], (row * 800 + 392 + dx) * 4)
+    }
+    f.png = PNG.sync.write(png)
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '简洁回复', revision: f.revision }),
+      windows
+    )
+    const messages = (text: string) => [
+      { direction: 'inbound', text },
+      { direction: 'inbound', text }
+    ]
+    f.fetch.mockResolvedValueOnce(response(visual('', messages('误读'))))
+    await advance(driver.connect('Q', t.signal, 'current_chat'))
+    const first = await driver.read(t.signal)
+    driver.accept(first)
+    const calls = f.fetch.mock.calls.length
+    f.fetch.mockResolvedValueOnce(response(visual('', messages('正确原文'))))
+    const recovered = await driver.read(t.signal, true)
+    expect(recovered.messages.map((message) => message.text)).toEqual(['正确原文', '正确原文'])
+    expect(f.fetch).toHaveBeenCalledTimes(calls + 1)
+    driver.accept(recovered)
+    expect((await driver.read(t.signal)).messages).toEqual(recovered.messages)
+    expect(f.fetch).toHaveBeenCalledTimes(calls + 1)
+  })
+  it('sends an exact native Unicode readback including emoji without a draft vision request', async () => {
+    const t = await connected()
+    const text = '你好呀，带 emoji 🤣。'
+    f.type.mockReturnValueOnce(text)
+    f.readEditor.mockResolvedValueOnce(text)
+    const before = f.fetch.mock.calls.length
+    f.fetch.mockResolvedValueOnce(
+      response(
+        visual('', [
+          { direction: 'inbound', text: '问题' },
+          { direction: 'outbound', text }
+        ])
+      )
+    )
+    expect(await advance(t.driver.dispatch(t.observation, text, t.signal))).toBe('sent')
+    expect(f.fetch).toHaveBeenCalledTimes(before + 1)
+    expect(f.type).toHaveBeenCalledTimes(1)
+    expect(f.readEditor).toHaveBeenCalledTimes(1)
+    expect(f.tap.mock.calls).toEqual([['enter']])
+  })
+  it('blocks a dropped supplementary character before Enter and records the actual failure', async () => {
+    const t = await connected()
+    f.type.mockReturnValueOnce('你好呀。')
+    expect(await advance(t.driver.dispatch(t.observation, '你好呀。🤣', t.signal))).toBe('not_sent')
+    expect(t.driver.dispatchFailure()).toEqual({
+      failureReason: 'send_draft_mismatch',
+      failureStage: 'draft_validation'
+    })
+    expect(f.tap).not.toHaveBeenCalled()
+    expect(f.readEditor).not.toHaveBeenCalled()
+  })
+  it('blocks human input appearing between native readback and the anchored capture', async () => {
+    const t = await connected()
+    f.type.mockReturnValueOnce('测试回复')
+    f.readEditor.mockResolvedValueOnce('我来自己回复')
+    expect(await advance(t.driver.dispatch(t.observation, '测试回复', t.signal))).toBe('not_sent')
+    expect(f.tap).not.toHaveBeenCalled()
+  })
+  it('blocks human input during the second native readback using the earlier pixel anchor', async () => {
+    const t = await connected()
+    f.type.mockReturnValueOnce('测试回复')
+    f.readEditor.mockImplementationOnce(async () => {
+      changeScreen(500, 480)
+      return '测试回复'
+    })
+    expect(await advance(t.driver.dispatch(t.observation, '测试回复', t.signal))).toBe('not_sent')
+    expect(f.tap).not.toHaveBeenCalled()
+  })
   it('blocks a nonhuman knowledge fallback without calling the model or typing', async () => {
     const driver = new ForegroundWechatDriver(
       () => ({
@@ -392,6 +492,71 @@ describe('project foreground sender boundaries', () => {
     expect(await advance(t.driver.dispatch(t.observation, '你好～', t.signal))).toBe('sent')
     expect(t.driver.receiptText()).toBe('你好~')
     expect(f.tap.mock.calls).toEqual([['enter']])
+  })
+  it('independently rereads a failed cached receipt without pressing Enter again', async () => {
+    const t = await connected()
+    f.type.mockReturnValueOnce('测试回复')
+    f.readEditor.mockResolvedValueOnce('测试回复')
+    const read = t.driver.read.bind(t.driver)
+    let receipts = 0
+    vi.spyOn(t.driver, 'read').mockImplementation(async (signal, fresh) => {
+      receipts++
+      if ((t.driver as unknown as { receiptReading: boolean }).receiptReading)
+        return {
+          ...t.observation,
+          messages: [...t.observation.messages, { direction: 'outbound', text: '误读' }]
+        }
+      return read(signal, fresh)
+    })
+    f.fetch.mockResolvedValueOnce(
+      response(
+        visual('', [
+          { direction: 'inbound', text: '问题' },
+          { direction: 'outbound', text: '测试回复' }
+        ])
+      )
+    )
+    expect(await advance(t.driver.dispatch(t.observation, '测试回复', t.signal))).toBe('sent')
+    expect(receipts).toBe(2)
+    expect(f.type).toHaveBeenCalledTimes(1)
+    expect(f.tap.mock.calls).toEqual([['enter']])
+  })
+  it('repairs a scroll-related OCR difference only when both captured bubbles read identically', async () => {
+    const t = await connected()
+    const prior = t.driver['evidence']!
+    const bubble = {
+      direction: 'inbound' as const,
+      x: 400,
+      y: 180,
+      width: 140,
+      height: 44,
+      fingerprint: 'a'.repeat(64)
+    }
+    prior.bubbles = [bubble]
+    const before = { ...t.observation, messages: [{ direction: 'inbound' as const, text: '问提' }] }
+    const after = {
+      ...t.observation,
+      messages: [
+        { direction: 'inbound' as const, text: '问题' },
+        { direction: 'outbound' as const, text: '测试回复' }
+      ]
+    }
+    t.driver['evidence'] = {
+      ...prior,
+      observation: after,
+      bubbles: [
+        { ...bubble, fingerprint: 'b'.repeat(64) },
+        { ...bubble, direction: 'outbound', fingerprint: 'c'.repeat(64) }
+      ]
+    }
+    f.fetch.mockResolvedValueOnce(response({ beforeText: '问题', afterText: '问题' }))
+    expect(await t.driver['verifyReceiptHistory'](before, after, 1, prior, t.signal)).toBe(true)
+    f.fetch.mockResolvedValueOnce(response({ beforeText: '问题', afterText: '另一条问题' }))
+    expect(await t.driver['verifyReceiptHistory'](before, after, 1, prior, t.signal)).toBe(false)
+    f.fetch.mockResolvedValueOnce(response({ beforeText: 'a b', afterText: 'ab' }))
+    expect(await t.driver['verifyReceiptHistory'](before, after, 1, prior, t.signal)).toBe(false)
+    expect(f.type).not.toHaveBeenCalled()
+    expect(f.tap).not.toHaveBeenCalled()
   })
   it('accepts the same visible draft when OCR changes only fullwidth punctuation', async () => {
     const t = await connected()

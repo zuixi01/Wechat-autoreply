@@ -38,3 +38,27 @@ try {
 } finally {
   clearTimeout(timer)
 }
+
+// A GDI bitmap can appear valid inside its creating process yet disappear when
+// that process exits. Check restoration from a separate, read-only process.
+const verifier = spawn(
+  dotnet,
+  [
+    join(
+      root,
+      'tests/native/ForegroundInputFixture/bin/Release/net10.0-windows/ForegroundInputFixture.dll'
+    ),
+    '--verify-restored-bitmap'
+  ],
+  { cwd: root, windowsHide: true, shell: false, stdio: 'inherit' }
+)
+const verificationTimer = setTimeout(() => verifier.kill(), 10000)
+try {
+  const code = await new Promise((resolve, reject) => {
+    verifier.once('error', reject)
+    verifier.once('exit', resolve)
+  })
+  if (code !== 0) throw new Error('foreground_clipboard_restore_fixture_failed')
+} finally {
+  clearTimeout(verificationTimer)
+}

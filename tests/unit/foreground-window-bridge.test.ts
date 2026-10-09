@@ -57,6 +57,36 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 describe('persistent pinned foreground helper', () => {
+  it('waits for a cancelled paste to restore the clipboard before rejecting, without killing or retrying it', async () => {
+    const value = bridge(),
+      controller = new AbortController()
+    respond = () => undefined
+    const binding = {
+      id: '71',
+      pid: 123,
+      path: 'C:/Weixin.exe',
+      startTicks: '1',
+      bounds: { x: 0, y: 0, width: 800, height: 600 }
+    }
+    const work = value.typeText(binding, '你好🤣', controller.signal)
+    const assertion = expect(work).rejects.toThrow('cancelled')
+    await vi.waitFor(() => expect(children[0]?.requests).toHaveLength(1))
+    controller.abort()
+    expect(children[0].kill).not.toHaveBeenCalled()
+    const request = children[0].requests[0]
+    children[0].stdout.write(
+      JSON.stringify({
+        id: request.id,
+        ok: true,
+        windows: [],
+        foreground: '71',
+        editorText: '你好🤣'
+      }) + '\n'
+    )
+    await assertion
+    expect(children[0].kill).not.toHaveBeenCalled()
+    expect(children[0].requests).toHaveLength(1)
+  })
   it('serializes concurrent queries on one verified process with distinct request IDs', async () => {
     const value = bridge(),
       signal = new AbortController().signal

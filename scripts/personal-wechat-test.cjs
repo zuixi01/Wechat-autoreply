@@ -107,6 +107,9 @@ async function finish(window, passed, code, status) {
   app.quit()
 }
 app.on('browser-window-created', (_event, window) => {
+  // The acceptance client must neither activate itself nor cover the WeChat
+  // pixels being tested. Ordinary application startup remains unchanged.
+  window.show = () => window.showInactive()
   window.webContents.once('did-finish-load', async () => {
     if (attached || window.isDestroyed()) return
     try {
@@ -124,6 +127,7 @@ app.on('browser-window-created', (_event, window) => {
       while (!window.isVisible() && Date.now() < visibleDeadline)
         await new Promise((resolve) => setTimeout(resolve, 50))
       if (!window.isVisible()) throw new Error('test_window_not_ready')
+      window.hide()
       const initial = await window.webContents.executeJavaScript('window.foregroundWechat.status()')
       for (const row of initial.records) initialIds.add(row.id)
       const models = await window.webContents.executeJavaScript(`(async()=>{

@@ -23,6 +23,10 @@ export const ForegroundRecordSchema = z.strictObject({
   question: z.string().max(16384),
   reply: z.string().max(4096),
   state: z.enum(['unknown', 'sent', 'not_sent']),
+  failureReason: z.string().max(128).optional(),
+  failureStage: z
+    .enum(['before_input', 'input', 'draft_validation', 'before_enter', 'receipt'])
+    .optional(),
   createdAt: z.number().int().nonnegative()
 })
 export const ForegroundCheckpointSchema = z.strictObject({
@@ -107,6 +111,7 @@ export function sameForegroundMessages(
   )
 }
 export type ForegroundRecord = z.infer<typeof ForegroundRecordSchema>
+export type ForegroundDispatchFailure = Pick<ForegroundRecord, 'failureReason' | 'failureStage'>
 export type ForegroundStatus = z.infer<typeof ForegroundStatusSchema>
 export interface ForegroundDesktopApi {
   status(): Promise<ForegroundStatus>

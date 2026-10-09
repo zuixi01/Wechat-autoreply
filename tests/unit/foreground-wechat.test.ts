@@ -52,6 +52,49 @@ function fixture(polling = false) {
   }
 }
 describe('project-owned foreground WeChat runtime', () => {
+  it('revalidates a changed screen before input without consuming the pending message', async () => {
+    const f = fixture()
+    await f.runtime.start('Q')
+    f.set(observation([msg('历史消息'), msg('需要回复的新消息')]))
+    f.driver.dispatchFailure = vi.fn(() => ({
+      failureReason: 'send_screen_changed',
+      failureStage: 'before_input'
+    }))
+    vi.mocked(f.driver.dispatch).mockResolvedValueOnce('not_sent')
+    await f.runtime.tick()
+    expect(f.runtime.status()).toMatchObject({ state: 'recovering', recoveryAttempts: 1 })
+    expect(f.records[0]).toMatchObject({
+      state: 'not_sent',
+      failureReason: 'send_screen_changed',
+      failureStage: 'before_input'
+    })
+    await f.runtime.tick()
+    expect(f.runtime.status()).toMatchObject({ state: 'running', recoveryAttempts: 0 })
+    expect(f.records[1]).toMatchObject({ state: 'sent', question: '需要回复的新消息' })
+    expect(f.driver.generate).toHaveBeenLastCalledWith(expect.anything(), expect.any(AbortSignal), [
+      msg('需要回复的新消息')
+    ])
+    await f.runtime.pause()
+  })
+  it('preserves input-stage failure details and never repeats input automatically', async () => {
+    const f = fixture()
+    await f.runtime.start('Q')
+    f.set(observation([msg('历史消息'), msg('新消息')]))
+    f.driver.dispatchFailure = vi.fn(() => ({
+      failureReason: 'send_draft_mismatch',
+      failureStage: 'draft_validation'
+    }))
+    vi.mocked(f.driver.dispatch).mockResolvedValue('not_sent')
+    await f.runtime.tick()
+    await f.runtime.tick()
+    expect(f.runtime.status()).toMatchObject({ state: 'paused', reason: 'send_draft_mismatch' })
+    expect(f.driver.dispatch).toHaveBeenCalledTimes(1)
+    expect(f.records[0]).toMatchObject({
+      failureStage: 'draft_validation',
+      failureReason: 'send_draft_mismatch'
+    })
+    await f.runtime.pause()
+  })
   it('matches scrolling OCR punctuation variants while preserving changed words and word spaces', () => {
     expect(
       sameForegroundMessages([msg('平台：http://example.test')], [msg('平台: http://example.test')])

@@ -43,12 +43,13 @@ export function registerForegroundWechatIpc(
       return {
         connect: (_target, signal) => driver.connect(target, signal, 'current_chat', false),
         metrics: () => driver.metrics(),
+        dispatchFailure: () => driver.dispatchFailure(),
         receiptText: () => driver.receiptText(),
         receiptFingerprint: () => driver.receiptFingerprint(),
         seed: (messages) => driver.seed(messages),
         accept: (observation) => driver.accept(observation),
         read: (signal, fresh) => driver.read(signal, fresh),
-        generate: (observation, signal) => driver.generate(observation, signal),
+        generate: (observation, signal, incoming) => driver.generate(observation, signal, incoming),
         dispatch: (observation, text, signal) => driver.dispatch(observation, text, signal)
       }
     },
