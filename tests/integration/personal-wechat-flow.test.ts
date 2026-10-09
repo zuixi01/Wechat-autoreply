@@ -74,6 +74,7 @@ let server: Server, baseURL: string, directory: string, journal: SqliteForegroun
 let runtime: ForegroundWechatRuntime | undefined
 let requests: { model: string; messages: { role: string; content: unknown }[] }[]
 let replyFailures = 0
+let replyContents: string[] = []
 beforeEach(async () => {
   desktop.input = ''
   desktop.messages = [{ direction: 'inbound', text: '历史消息' }]
@@ -84,6 +85,7 @@ beforeEach(async () => {
   runtime = undefined
   requests = []
   replyFailures = 0
+  replyContents = []
   directory = mkdtempSync(join(tmpdir(), 'personal-wechat-flow-'))
   journal = new SqliteForegroundJournal(join(directory, 'journal.sqlite'))
   server = createServer(async (request, response) => {
@@ -108,7 +110,7 @@ beforeEach(async () => {
             history: [0.4, 0.2, 0.5, 0.4],
             input: [0.4, 0.7, 0.5, 0.2]
           })
-        : '已收到你的问题，我会尽快处理。'
+        : (replyContents.shift() ?? '已收到你的问题，我会尽快处理。')
     response.writeHead(200, { 'content-type': 'application/json' })
     response.end(JSON.stringify({ choices: [{ message: { content } }] }))
   })
@@ -151,6 +153,36 @@ const inbound = (text: string): z.infer<typeof ForegroundMessageSchema> => ({
   text
 })
 describe('personal WeChat complete flow with synthetic desktop and loopback model API', () => {
+  it('rewrites a nonhuman draft before any typing and sends only the account owner reply', async () => {
+    runtime = createRuntime()
+    await runtime.start('Q', 'current_chat')
+    desktop.messages.push(inbound('今天太阳很好，出去打球吗？'))
+    replyContents = ['我没有现实中的身体，今天没法真的出去运动呀。', '想去哪儿打？']
+    await runtime.tick()
+    expect(runtime.status().state).toBe('running')
+    expect(desktop.sends).toBe(1)
+    expect(journal.list().map((row) => row.reply)).toEqual(['想去哪儿打？'])
+    const generated = requests.filter((row) => row.model === 'reply-fixture')
+    expect(generated).toHaveLength(2)
+    expect(generated[0].messages[0].content).toContain('“我”始终指账号本人')
+    expect(generated[1].messages[0].content).toContain('上一版草稿')
+    expect(desktop.messages.at(-1)?.text).toBe('想去哪儿打？')
+  }, 15000)
+
+  it('pauses before drafting or creating a send record when both replies leak a virtual identity', async () => {
+    runtime = createRuntime()
+    await runtime.start('Q', 'current_chat')
+    desktop.messages.push(inbound('你今天在哪里？'))
+    replyContents = ['我是一个虚拟助手，没有真实的所在地。', '作为一个 AI，我没有真实的身体。']
+    await runtime.tick()
+    expect(runtime.status().state).toBe('paused')
+    expect(runtime.status().reason).toBe('reply_identity_invalid')
+    expect(desktop.sends).toBe(0)
+    expect(desktop.input).toBe('')
+    expect(journal.list()).toHaveLength(0)
+    expect(requests.filter((row) => row.model === 'reply-fixture')).toHaveLength(2)
+  })
+
   it('sends five consecutive replies, recovers a provider outage and foreground switch, and performs no idle model polling', async () => {
     runtime = createRuntime()
     await runtime.start('Q', 'current_chat')

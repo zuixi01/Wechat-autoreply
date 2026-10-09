@@ -182,6 +182,42 @@ async function connected() {
   return { driver, signal, observation }
 }
 describe('project foreground sender boundaries', () => {
+  it('blocks a nonhuman knowledge fallback without calling the model or typing', async () => {
+    const driver = new ForegroundWechatDriver(
+      () => ({
+        vision: model,
+        reply: model,
+        rules: '自然聊天',
+        revision: f.revision,
+        knowledge: () => ({ instructions: '', fallback: '我没有真实的身体，无法外出。' })
+      }),
+      windows
+    )
+    await expect(
+      driver.generate(
+        {
+          windowToken: 'synthetic',
+          contact: 'Q',
+          privateChat: true,
+          inputText: '',
+          messages: [{ direction: 'inbound', text: '出去玩吗？' }],
+          revision: f.revision
+        },
+        controller().signal
+      )
+    ).rejects.toThrow('reply_identity_invalid')
+    expect(f.fetch).not.toHaveBeenCalled()
+    expect(f.type).not.toHaveBeenCalled()
+    expect(f.tap).not.toHaveBeenCalled()
+  })
+
+  it('refuses a virtual self-description supplied directly to dispatch before any input', async () => {
+    const t = await connected()
+    expect(await t.driver.dispatch(t.observation, '我是一个虚拟助手。', t.signal)).toBe('not_sent')
+    expect(f.type).not.toHaveBeenCalled()
+    expect(f.tap).not.toHaveBeenCalled()
+  })
+
   it('retains duplicate physical messages and reads only newly appearing bubbles', async () => {
     const t = await connected()
     const draw = (y: number) => {

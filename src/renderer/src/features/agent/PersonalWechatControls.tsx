@@ -32,6 +32,8 @@ const reasons: Record<string, string> = {
   model_response_invalid: '模型未返回有效结果，本次已停止。',
   rules_not_configured: '请先保存回复规则。',
   rules_changed: '回复规则、模型或知识库已更新，请重新启动以使用新配置。',
+  reply_identity_invalid:
+    '回复仍包含 AI 或虚拟身份的自我描述，已拦截且未发送。请检查回复规则后重新启动。',
   target_rules_ambiguous: '对象用户中存在多个同名规则，请先明确要使用的对象。',
   target_auto_reply_disabled: '该对象已关闭自动回复，请先在对象用户中开启。',
   contact_not_unique:

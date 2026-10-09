@@ -8,6 +8,7 @@
 
 import { MemoryCardBrief } from './trace/trace-types'
 import { errorStringProperty } from './error-details'
+import { PERSONAL_REPLY_IDENTITY } from '../shared/reply-persona'
 
 interface CompletionMessage {
   role: 'system' | 'user'
@@ -66,7 +67,8 @@ export function buildContextSection(options: ContextSectionOptions): string {
 const DEFAULT_MODEL = 'doubao-seed-2-0-lite-260215'
 const DEFAULT_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3'
 
-const REPLY_SYSTEM_PROMPT = `你是一个微信/企业微信自动回复助手，输入为聊天窗口截图识别后的对话文本内容。
+const REPLY_SYSTEM_PROMPT = `${PERSONAL_REPLY_IDENTITY}
+输入为聊天窗口截图识别后的对话文本内容。
 
 ## 核心任务
 识别对话最新消息发送方、消息类型，结合配套回复模式规则生成符合场景的真人回复文本。

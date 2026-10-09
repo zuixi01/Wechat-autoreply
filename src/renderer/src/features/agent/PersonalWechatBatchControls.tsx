@@ -30,6 +30,7 @@ const reasons: Record<string, string> = {
   model_network_failed: '模型连接失败，请在模型配置中测试连接。',
   rules_not_configured: '请先保存回复规则。',
   rules_changed: '规则或模型配置已变化，请重新启动。',
+  reply_identity_invalid: '回复包含 AI 或虚拟身份的自我描述，已拦截且未发送，请检查规则。',
   window_changed: '微信窗口实例已变化，请重新启动。',
   wechat_window_unavailable: '未找到唯一的微信窗口，请先登录并关闭多开窗口。',
   visual_response_invalid: '视觉识别格式校验失败，请检查视觉模型。'

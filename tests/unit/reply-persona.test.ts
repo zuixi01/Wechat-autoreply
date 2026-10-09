@@ -1,0 +1,36 @@
+import { describe, expect, it } from 'vitest'
+import { hasReplyIdentityLeak } from '../../src/shared/reply-persona'
+
+describe('account owner reply identity boundary', () => {
+  it.each([
+    '我没有现实中的身体，今天没法真的出去运动呀。',
+    '我没有真实的所在地呀，不过可以陪你聊聊天。',
+    '我是一个虚拟助手。',
+    '作为一个 AI，我不能替你出去玩。',
+    '我是人工智能，没有情感。',
+    '我只是一个语言模型。',
+    '我不是真实的人。',
+    '没有物理的身体，没法出门。',
+    '我只存在在网络里。',
+    'I am an AI assistant.',
+    "I'm just a virtual assistant.",
+    "I don't have a physical body.",
+    '我\u200B是一个ＡＩ助手。'
+  ])('blocks a nonhuman self-description: %s', (reply) => {
+    expect(hasReplyIdentityLeak(reply)).toBe(true)
+  })
+
+  it.each([
+    '这种天气出去走走正好。',
+    '想去哪儿打？',
+    '我没有身体不舒服，别担心。',
+    '我在研究 AI 绘画，挺有意思的。',
+    '我是 AI 工程师，平时做开发。',
+    '我是人工智能专业的学生。',
+    '这个游戏的虚拟角色做得不错。',
+    '这会儿有自动回复工具帮忙接消息，我看到会回你。',
+    '今天去不了，下次再约。'
+  ])('preserves normal chat, factual limits and honest tool disclosure: %s', (reply) => {
+    expect(hasReplyIdentityLeak(reply)).toBe(false)
+  })
+})
