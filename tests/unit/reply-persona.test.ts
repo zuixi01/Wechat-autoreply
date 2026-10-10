@@ -1,8 +1,27 @@
 import { describe, expect, it } from 'vitest'
-import { hasReplyIdentityLeak } from '../../src/shared/reply-persona'
+import { hasReplyIdentityLeak, ownerStyleExamples } from '../../src/shared/reply-persona'
 
 describe('account owner reply identity boundary', () => {
+  it('uses owner wording but excludes incoming, generated and identity-template messages', () => {
+    expect(
+      ownerStyleExamples(
+        [
+          { direction: 'inbound', text: '对方的口头习惯' },
+          { direction: 'outbound', text: '你好呀～' },
+          { direction: 'outbound', text: '哈哈，那就好😊' },
+          { direction: 'outbound', text: '我是这个微信账号的本人呀' },
+          { direction: 'outbound', text: '我是一个虚拟助手' },
+          { direction: 'outbound', text: '好嘞，等我一下哈' },
+          { direction: 'outbound', text: '好嘞，等我一下哈' },
+          { direction: 'outbound', text: '成，晚点聊' }
+        ],
+        ['你好呀~', '哈哈，那就好😁']
+      )
+    ).toEqual(['好嘞，等我一下哈', '成，晚点聊'])
+  })
   it.each([
+    '我是这个微信账号的本人呀，平时会聊天。',
+    '我负责代写微信账号本人的回复。',
     '我没有现实中的身体，今天没法真的出去运动呀。',
     '我没有真实的所在地呀，不过可以陪你聊聊天。',
     '我是一个虚拟助手。',

@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Jimp } from 'jimp'
 import { PNG } from 'pngjs'
+import { z } from 'zod'
 
 const f = vi.hoisted(() => ({
   active: 71,
+  occluded: false,
   revision: 'rules-1',
   png: Buffer.alloc(0) as Buffer<ArrayBufferLike>,
   tap: vi.fn(),
@@ -35,7 +37,8 @@ const windows = {
       id: '00000000-0000-4000-8000-000000000000',
       ok: true as const,
       windows: [nativeWindow],
-      foreground: String(f.active)
+      foreground: String(f.active),
+      occluded: f.occluded
     }
   },
   focus: async () => {
@@ -146,8 +149,10 @@ beforeEach(async () => {
   vi.useFakeTimers()
   vi.resetAllMocks()
   f.active = 71
+  f.occluded = false
   f.revision = 'rules-1'
   f.inspectEffect = undefined
+  f.readEditor.mockResolvedValue('')
   nativeWindow.bounds = { x: 0, y: 0, width: 800, height: 600 }
   f.png = await new Jimp({ width: 800, height: 600, color: 0xffffffff }).getBuffer('image/png')
   vi.stubGlobal('fetch', f.fetch)
@@ -184,6 +189,22 @@ async function connected() {
   return { driver, signal, observation }
 }
 describe('project foreground sender boundaries', () => {
+  it('waits without vision requests or input while a notification covers the foreground chat', async () => {
+    const t = await connected()
+    const calls = f.fetch.mock.calls.length
+    f.occluded = true
+    await expect(t.driver.read(t.signal)).rejects.toThrow('screen_obscured')
+    expect(await t.driver.dispatch(t.observation, '未输入的回复', t.signal)).toBe('not_sent')
+    expect(t.driver.dispatchFailure()).toMatchObject({
+      failureReason: 'screen_obscured',
+      failureStage: 'before_input'
+    })
+    expect(f.fetch).toHaveBeenCalledTimes(calls)
+    expect(f.type).not.toHaveBeenCalled()
+    expect(f.tap).not.toHaveBeenCalled()
+    f.occluded = false
+    expect(await t.driver.read(t.signal)).toEqual(t.observation)
+  })
   it('revalidates focus-related chat pixels before typing and retains all send checks', async () => {
     const t = await connected()
     const text = '确认后的回复'
@@ -234,6 +255,33 @@ describe('project foreground sender boundaries', () => {
     expect((await driver.read(t.signal)).messages).toEqual(recovered.messages)
     expect(f.fetch).toHaveBeenCalledTimes(calls + 1)
   })
+  it('retains the bottom reply when the model puts the editor above its physical divider', async () => {
+    const t = await connected()
+    const png = PNG.sync.read(f.png)
+    for (let col = 320; col < 800; col++) png.data.set([230, 230, 230, 255], (450 * 800 + col) * 4)
+    for (let row = 370; row < 414; row++)
+      for (let col = 580; col < 720; col++)
+        png.data.set([155, 240, 157, 255], (row * 800 + col) * 4)
+    for (let dx = 0; dx < 8; dx++)
+      for (let row = 392 - dx; row <= 392 + dx; row++)
+        png.data.set([155, 240, 157, 255], (row * 800 + 720 + dx) * 4)
+    f.png = PNG.sync.write(png)
+    f.fetch.mockResolvedValueOnce(
+      response({
+        ...visual('', [{ direction: 'outbound', text: '最下面的回复' }]),
+        input: [0.4, 0.6, 0.5, 0.3]
+      })
+    )
+    const next = await t.driver.read(t.signal, true)
+    expect(next.messages).toHaveLength(1)
+    expect(next.messages[0]).toMatchObject({
+      direction: 'outbound',
+      text: '最下面的回复',
+      pixelFingerprint: expect.any(String)
+    })
+    expect(f.type).not.toHaveBeenCalled()
+    expect(f.tap).not.toHaveBeenCalled()
+  })
   it('sends an exact native Unicode readback including emoji without a draft vision request', async () => {
     const t = await connected()
     const text = '你好呀，带 emoji 🤣。'
@@ -251,7 +299,7 @@ describe('project foreground sender boundaries', () => {
     expect(await advance(t.driver.dispatch(t.observation, text, t.signal))).toBe('sent')
     expect(f.fetch).toHaveBeenCalledTimes(before + 1)
     expect(f.type).toHaveBeenCalledTimes(1)
-    expect(f.readEditor).toHaveBeenCalledTimes(1)
+    expect(f.readEditor).toHaveBeenCalledTimes(2)
     expect(f.tap.mock.calls).toEqual([['enter']])
   })
   it('blocks a dropped supplementary character before Enter and records the actual failure', async () => {
@@ -318,6 +366,87 @@ describe('project foreground sender boundaries', () => {
     expect(f.tap).not.toHaveBeenCalled()
   })
 
+  it.each(['', '人工草稿'])(
+    'reads a new bubble and changed draft evidence in one request: %s',
+    async (inputText) => {
+      const t = await connected()
+      const draw = (y: number, width: number): void => {
+        const png = PNG.sync.read(f.png)
+        for (let row = y; row < y + 44; row++)
+          for (let x = 400; x < 400 + width; x++)
+            png.data.set([236, 236, 238, 255], (row * 800 + x) * 4)
+        for (let dx = 0; dx < 8; dx++)
+          for (let row = y + 22 - dx; row <= y + 22 + dx; row++)
+            png.data.set([236, 236, 238, 255], (row * 800 + 392 + dx) * 4)
+        f.png = PNG.sync.write(png)
+      }
+      draw(160, 150)
+      const driver = new ForegroundWechatDriver(
+        () => ({ vision: model, reply: model, rules: '简洁回复', revision: f.revision }),
+        windows
+      )
+      f.fetch.mockResolvedValueOnce(
+        response(visual('', [{ direction: 'inbound', text: '旧消息' }]))
+      )
+      await advance(driver.connect('Q', t.signal, 'current_chat'))
+      driver.accept(await driver.read(t.signal))
+      vi.setSystemTime(Date.now() + 31000)
+      draw(230, 175)
+      changeScreen(400, 470)
+      const before = f.fetch.mock.calls.length
+      f.fetch.mockResolvedValueOnce(response({ text: '新消息', inputText }))
+      const next = await driver.read(t.signal)
+      expect(next.messages.map((message) => message.text)).toEqual(['旧消息', '新消息'])
+      expect(next.inputText).toBe(inputText)
+      expect(f.fetch).toHaveBeenCalledTimes(before + 1)
+      expect(f.type).not.toHaveBeenCalled()
+      expect(f.tap).not.toHaveBeenCalled()
+    }
+  )
+  it('keeps clipped message pixels out of the title and reuses exact unchanged draft pixels after idle', async () => {
+    const t = await connected()
+    const draw = (y: number, x: number, width: number, outbound = false): void => {
+      const png = PNG.sync.read(f.png),
+        color = outbound ? [155, 240, 157, 255] : [236, 236, 238, 255]
+      for (let row = y; row < y + 44; row++)
+        for (let col = x; col < x + width; col++) png.data.set(color, (row * 800 + col) * 4)
+      for (let dx = 0; dx < 8; dx++)
+        for (let row = y + 22 - dx; row <= y + 22 + dx; row++)
+          png.data.set(color, (row * 800 + (outbound ? x + width + 7 - dx : x - 8 + dx)) * 4)
+      f.png = PNG.sync.write(png)
+    }
+    draw(90, 580, 140, true)
+    draw(160, 400, 150)
+    const png = PNG.sync.read(f.png)
+    for (let row = 0; row < 100; row++)
+      for (let col = 320; col < 800; col++)
+        png.data.set([248, 248, 248, 255], (row * 800 + col) * 4)
+    for (let col = 320; col < 800; col++) png.data.set([246, 246, 246, 255], (100 * 800 + col) * 4)
+    f.png = PNG.sync.write(png)
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '简洁回复', revision: f.revision }),
+      windows
+    )
+    f.fetch.mockResolvedValueOnce(response(visual('', [{ direction: 'inbound', text: '旧消息' }])))
+    await advance(driver.connect('Q', t.signal, 'current_chat'))
+    driver.accept(await driver.read(t.signal))
+    const calls = f.fetch.mock.calls.length
+    vi.setSystemTime(Date.now() + 31000)
+    await driver.read(t.signal)
+    expect(f.fetch).toHaveBeenCalledTimes(calls)
+    changeScreen(600, 110)
+    draw(230, 400, 175)
+    f.fetch.mockResolvedValueOnce(response({ text: '新消息' }))
+    const next = await driver.read(t.signal)
+    expect(next.messages.map((m) => m.text)).toEqual(['旧消息', '新消息'])
+    expect(next.inputText).toBe('')
+    expect(f.fetch).toHaveBeenCalledTimes(calls + 1)
+    expect(JSON.parse(f.fetch.mock.calls.at(-1)![1].body).messages[1].content[0].text).toContain(
+      '图片仅包含一个聊天气泡'
+    )
+    expect(f.type).not.toHaveBeenCalled()
+    expect(f.tap).not.toHaveBeenCalled()
+  })
   it('retains duplicate physical messages and reads only newly appearing bubbles', async () => {
     const t = await connected()
     const draw = (y: number) => {
@@ -371,7 +500,14 @@ describe('project foreground sender boundaries', () => {
       () => ({ vision: model, reply: model, rules: '简洁回复', revision: f.revision }),
       windows
     )
-    f.fetch.mockResolvedValueOnce(response(visual()))
+    f.fetch.mockResolvedValueOnce(
+      response(
+        visual(
+          '',
+          Array.from({ length: 3 }, () => ({ direction: 'inbound', text: '误读' }))
+        )
+      )
+    )
     await advance(restarted.connect('Q', t.signal, 'current_chat'))
     restarted.seed(first.messages)
     const resumed = await restarted.read(t.signal)
@@ -587,6 +723,97 @@ describe('project foreground sender boundaries', () => {
         )
       )
     expect(await advance(t.driver.dispatch(t.observation, '测试回复', t.signal))).toBe('sent')
+    expect(f.tap.mock.calls).toEqual([['enter']])
+  })
+  it('rechecks an uncertain receipt later without typing or pressing Enter again', async () => {
+    const t = await connected()
+    const text = '测试回复'
+    f.type.mockReturnValueOnce(text)
+    f.readEditor.mockResolvedValueOnce(text)
+    f.fetch.mockResolvedValue(response(visual()))
+    expect(await advance(t.driver.dispatch(t.observation, text, t.signal))).toBe('unknown')
+    expect(t.driver.dispatchFailure()).toMatchObject({
+      failureStage: 'receipt',
+      failureReason: 'send_echo_unverified'
+    })
+    f.fetch.mockResolvedValueOnce(
+      response(
+        visual('', [
+          { direction: 'inbound', text: '问题' },
+          { direction: 'outbound', text }
+        ])
+      )
+    )
+    expect(await advance(t.driver.verifyReceipt(t.observation, text, t.signal))).toBe('sent')
+    expect(f.type).toHaveBeenCalledTimes(1)
+    expect(f.tap.mock.calls).toEqual([['enter']])
+    await expect(t.driver.verifyReceipt(t.observation, text, t.signal)).rejects.toThrow(
+      'receipt_context_invalid'
+    )
+  })
+  it('uses exact native empty-editor readback when receipt OCR cannot identify the input', async () => {
+    const t = await connected(),
+      text = '测试回复'
+    f.type.mockReturnValueOnce(text)
+    f.readEditor.mockResolvedValueOnce(text)
+    f.fetch.mockResolvedValueOnce(
+      response({
+        ...visual('', [
+          { direction: 'inbound', text: '问题' },
+          { direction: 'outbound', text }
+        ]),
+        inputText: null
+      })
+    )
+    expect(await advance(t.driver.dispatch(t.observation, text, t.signal))).toBe('sent')
+    expect(f.tap.mock.calls).toEqual([['enter']])
+  })
+  it.each([
+    { inputText: '', outcome: 'sent' },
+    { inputText: '人工草稿', outcome: 'unknown' }
+  ])(
+    'requires visual draft proof after unavailable native copy: $outcome',
+    async ({ inputText, outcome }) => {
+      const t = await connected(),
+        text = '测试回复'
+      f.type.mockReturnValueOnce(text)
+      f.readEditor
+        .mockResolvedValueOnce(text)
+        .mockRejectedValueOnce(new Error('editor_text_unavailable'))
+      f.fetch.mockResolvedValueOnce(
+        response(
+          visual(inputText, [
+            { direction: 'inbound', text: '问题' },
+            { direction: 'outbound', text }
+          ])
+        )
+      )
+      expect(await advance(t.driver.dispatch(t.observation, text, t.signal))).toBe(outcome)
+      expect(f.type).toHaveBeenCalledTimes(1)
+      expect(f.tap.mock.calls).toEqual([['enter']])
+    }
+  )
+  it('retries invalid paired receipt OCR without typing or pressing Enter again', async () => {
+    const t = await connected(),
+      text = '测试回复'
+    f.type.mockReturnValueOnce(text)
+    f.readEditor.mockResolvedValueOnce(text)
+    vi.spyOn(
+      t.driver as unknown as { verifyReceiptHistory: () => Promise<boolean> },
+      'verifyReceiptHistory'
+    )
+      .mockRejectedValueOnce(new z.ZodError([]))
+      .mockResolvedValue(true)
+    f.fetch.mockResolvedValue(
+      response(
+        visual('', [
+          { direction: 'inbound', text: '误读了旧问题' },
+          { direction: 'outbound', text }
+        ])
+      )
+    )
+    expect(await advance(t.driver.dispatch(t.observation, text, t.signal))).toBe('sent')
+    expect(f.type).toHaveBeenCalledTimes(1)
     expect(f.tap.mock.calls).toEqual([['enter']])
   })
   it('rereads a malformed visual response once without desktop input and requests JSON output', async () => {

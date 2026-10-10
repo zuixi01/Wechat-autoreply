@@ -27,9 +27,9 @@ const reasons: Record<string, string> = {
   model_busy: '模型接口繁忙，正在等待重试。',
   model_network_failed:
     '无法连接模型接口，连接可能被关闭或重置。请在模型配置中测试连接，并检查当前中转站地址和网络。尚未自动发送回复。',
-  model_timeout: '模型请求超时，请在模型配置中测试连接后重新启动。',
+  model_timeout: '模型请求超时，正在自动重试；未处理消息会保留。',
   model_endpoint_invalid: '模型接口地址无效，请检查模型配置。',
-  model_response_invalid: '模型未返回有效结果，本次已停止。',
+  model_response_invalid: '模型未返回完整有效结果，正在重新请求；不会发送截断的回复。',
   rules_not_configured: '请先保存回复规则。',
   rules_changed: '回复规则、模型或知识库已更新，请重新启动以使用新配置。',
   reply_identity_invalid:
@@ -42,6 +42,7 @@ const reasons: Record<string, string> = {
   human_input: '检测到输入框已有人工草稿，已暂停；请处理草稿后重新启动。',
   human_reply: '检测到你已人工回复，已暂停。',
   foreground_lost: '微信已失去前台。回到原聊天后会重新校验并继续；此期间不输入或发送。',
+  screen_obscured: '微信聊天被通知或其他窗口遮挡，正在等待；移开遮挡后会自动核对并继续。',
   window_changed: '微信窗口或实例已变化，请重新启动。',
   window_too_small: '微信窗口过小，请放大后重新启动。',
   window_out_of_screen: '请将微信完整放在主显示器内，再重新启动。',
@@ -50,6 +51,7 @@ const reasons: Record<string, string> = {
   desktop_input_unavailable: '桌面输入组件不可用，请重新启动项目。',
   message_gap: '可见消息无法与上次读取连续衔接，已停止，请人工核对后重新启动。',
   send_unknown: '发送结果无法确认，已停止且不会重发。请打开微信核对下方记录，再明确标记发送结果。',
+  send_verifying: '正在重新核验已尝试发送的回复；只检查，不会重复输入或发送。核验通过后继续监听。',
   checkpoint_invalid: '恢复记录不完整，请核对微信后选择“以当前消息重新接入”。',
   send_cancelled: '发送前检查未通过，未确认发出。请检查微信聊天和输入框后重新启动。',
   send_screen_changed: '发送前画面发生变化，尚未发送；输入前的变化会重新读取后继续。',
@@ -64,8 +66,7 @@ const reasons: Record<string, string> = {
   input_failed: '输入操作未完成，未按下发送键，请核对微信草稿。',
   input_state_changed: '输入焦点或按键状态已变化，未按下发送键。',
   visual_evidence_invalid: '截图识别没有提供有效的聊天和输入区域，已停止。',
-  visual_response_invalid:
-    '视觉模型连续两次返回了不符合读取格式的结果，已暂停；请检查视觉模型后重新接入聊天。',
+  visual_response_invalid: '画面识别暂未得到完整结果，正在独立重新读取。',
   read_failed: '读取或识别失败，已停止，请检查微信与视觉模型。',
   windows_required: '个人微信前台模式目前支持 Windows。'
 }
@@ -162,7 +163,7 @@ export default function PersonalWechatControls({ active }: { active: boolean }):
               : states[status.state]
             : '正在读取状态'}
           {status?.state === 'recovering'
-            ? `：第 ${status.recoveryAttempts} 次重试，恢复后会继续核对尚未回复的消息。`
+            ? `：${reasons[status.reason] ?? reasons.read_failed} 第 ${status.recoveryAttempts} 次重试。`
             : status?.reason && status.reason !== 'none'
               ? `：${reasons[status.reason] ?? reasons.read_failed}`
               : ''}

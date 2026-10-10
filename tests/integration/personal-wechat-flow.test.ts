@@ -249,7 +249,10 @@ describe('personal WeChat complete flow with synthetic desktop and loopback mode
     desktop.messages.push(inbound('这个问题需要核对。'))
     desktop.echo = false
     await runtime.tick()
-    expect(runtime.status().reason).toBe('send_unknown')
+    expect(runtime.status().reason).toBe('send_verifying')
+    await runtime.tick()
+    expect(desktop.sends).toBe(1)
+    await runtime.pause()
     const row = journal.unresolved()[0]
     runtime = createRuntime()
     expect(

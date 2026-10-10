@@ -8,6 +8,7 @@ if (process.platform === 'win32') {
     'native/ForegroundWindow/Program.cs',
     'native/ForegroundWindow/UnicodeInput.cs',
     'native/ForegroundWindow/ClipboardInput.cs',
+    'native/ForegroundWindow/SurfaceProbe.cs',
     'native/ForegroundWindow/ForegroundWindow.csproj'
   ]
   let stale = true

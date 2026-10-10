@@ -83,6 +83,7 @@ internal static class Program {
       void Guard() {
        if(!Windows().Any(value=>value==selected)) throw new Exception("window_changed");
        if(Editor(handle,selected.Pid)!=editor) throw new Exception("input_state_changed");
+       if(SurfaceProbe.IsBlocked(handle,selected.Bounds)) throw new Exception("screen_obscured");
       }
       using var transfer=new ClipboardInput();
       editorText=command=="type"
@@ -90,8 +91,10 @@ internal static class Program {
        :transfer.CopyEditor(selected.Pid,(key,control)=>Shortcut(key,control,Guard),Guard);
      }
     } else if(command!="inspect") throw new Exception("request_invalid");
-    Console.WriteLine(JsonSerializer.Serialize(new {id,ok=true,windows=Windows(),foreground=Foreground(),editorText},Json));
-   } catch(Exception e) {var code=e.Message is "request_invalid" or "window_changed" or "foreground_lost" or "text_invalid" or "input_failed" or "input_state_changed" or "clipboard_unavailable" or "clipboard_state_changed" or "editor_text_unavailable"?e.Message:"window_query_failed";Console.WriteLine(JsonSerializer.Serialize(new{id,ok=false,error=code},Json));}
+    var current=Windows();var foreground=Foreground();var active=current.SingleOrDefault(value=>value.Id==foreground);
+    var occluded=active!=null && SurfaceProbe.IsBlocked((nint)long.Parse(active.Id),active.Bounds);
+    Console.WriteLine(JsonSerializer.Serialize(new {id,ok=true,windows=current,foreground,editorText,occluded},Json));
+   } catch(Exception e) {var code=e.Message is "request_invalid" or "window_changed" or "foreground_lost" or "text_invalid" or "input_failed" or "input_state_changed" or "clipboard_unavailable" or "clipboard_state_changed" or "editor_text_unavailable" or "screen_obscured"?e.Message:"window_query_failed";Console.WriteLine(JsonSerializer.Serialize(new{id,ok=false,error=code},Json));}
    Console.Out.Flush();
   }
  }

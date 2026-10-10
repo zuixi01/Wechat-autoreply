@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { textBubbles, type BubblePixels } from '../../src/main/services/foreground-bubbles'
+import {
+  chatInputTop,
+  chatHeaderBottom,
+  textBubbles,
+  type BubblePixels
+} from '../../src/main/services/foreground-bubbles'
 function frame(): BubblePixels {
   return { width: 800, height: 600, data: Buffer.alloc(800 * 600 * 4, 248) }
 }
@@ -35,6 +40,28 @@ function bubble(image: BubblePixels, x: number, y: number, outbound = false): vo
   rect(image, x + 20, y + 12, 80, 3, [15, 15, 15])
 }
 describe('physical WeChat text bubble segmentation', () => {
+  it('anchors the title above a clipped green bubble even when its grey divider is very light', () => {
+    const image = frame()
+    bubble(image, 550, 90, true)
+    rect(image, 160, 0, 640, 100, [248, 248, 248])
+    rect(image, 160, 100, 640, 1, [246, 246, 246])
+    expect(chatHeaderBottom(image, 0.2, 0.2)).toBeCloseTo(101 / 600)
+    expect(
+      chatHeaderBottom({ ...image, data: Buffer.alloc(image.data.length, 60) }, 0.2, 0.2)
+    ).toBeUndefined()
+  })
+  it.each([0.55, 0.8])('uses the editor divider despite an imprecise top estimate: %s', (hint) => {
+    const image = frame()
+    rect(image, 160, 450, 640, 2, [230, 230, 230])
+    expect(chatInputTop(image, 0.2, hint)).toBe(0.75)
+  })
+  it('does not infer an editor border from a narrow message decoration or a dark theme', () => {
+    const image = frame()
+    rect(image, 300, 450, 150, 2, [230, 230, 230])
+    expect(chatInputTop(image, 0.2, 0.55)).toBeUndefined()
+    image.data.fill(60)
+    expect(chatInputTop(image, 0.2, 0.7)).toBeUndefined()
+  })
   it('uses the physical header divider to reject a clipped top bubble despite an imprecise layout', () => {
     const image = frame()
     bubble(image, 230, 78)

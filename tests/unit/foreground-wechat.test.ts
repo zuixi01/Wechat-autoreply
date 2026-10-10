@@ -52,6 +52,46 @@ function fixture(polling = false) {
   }
 }
 describe('project-owned foreground WeChat runtime', () => {
+  it('retains progress through a long screen obstruction and continues when it clears', async () => {
+    const f = fixture()
+    await f.runtime.start('Q')
+    f.set(observation([msg('历史消息'), msg('遮挡期间收到的问题')]))
+    vi.mocked(f.driver.read).mockRejectedValue(new Error('screen_obscured'))
+    for (let i = 0; i < 12; i++) await f.runtime.tick()
+    expect(f.runtime.status()).toMatchObject({
+      state: 'waiting_foreground',
+      reason: 'screen_obscured'
+    })
+    expect(f.records).toEqual([])
+    expect(f.driver.dispatch).not.toHaveBeenCalled()
+    vi.mocked(f.driver.read).mockResolvedValue(
+      observation([msg('历史消息'), msg('遮挡期间收到的问题')])
+    )
+    await f.runtime.tick()
+    expect(f.records).toHaveLength(1)
+    expect(f.records[0]).toMatchObject({ state: 'sent', question: '遮挡期间收到的问题' })
+    expect(f.runtime.status().state).toBe('running')
+    await f.runtime.pause()
+  })
+  it('waits after an obstruction before input without losing the pending question', async () => {
+    const f = fixture()
+    await f.runtime.start('Q')
+    f.set(observation([msg('历史消息'), msg('新问题')]))
+    f.driver.dispatchFailure = vi.fn(() => ({
+      failureReason: 'screen_obscured',
+      failureStage: 'before_input'
+    }))
+    vi.mocked(f.driver.dispatch).mockResolvedValueOnce('not_sent')
+    await f.runtime.tick()
+    expect(f.runtime.status()).toMatchObject({
+      state: 'waiting_foreground',
+      reason: 'screen_obscured'
+    })
+    await f.runtime.tick()
+    expect(f.records.map((r) => r.state)).toEqual(['not_sent', 'sent'])
+    expect(f.records[1].question).toBe('新问题')
+    await f.runtime.pause()
+  })
   it('revalidates a changed screen before input without consuming the pending message', async () => {
     const f = fixture()
     await f.runtime.start('Q')
@@ -185,18 +225,84 @@ describe('project-owned foreground WeChat runtime', () => {
     expect(f.runtime.status()).toMatchObject({ state: 'running', recoveryAttempts: 0 })
     await f.runtime.pause()
   })
-  it('stops after bounded transient failures and honors pause during recovery', async () => {
+  it('keeps waiting through a long provider outage and honors pause during recovery', async () => {
     const f = fixture()
     await f.runtime.start('Q')
     vi.mocked(f.driver.read).mockRejectedValue(new Error('model_busy'))
-    for (let count = 0; count < 6; count++) await f.runtime.tick()
-    expect(f.runtime.status().state).toBe('recovering')
+    for (let count = 0; count < 12; count++) await f.runtime.tick()
+    expect(f.runtime.status()).toMatchObject({ state: 'recovering', recoveryAttempts: 6 })
     await f.runtime.tick()
-    expect(f.runtime.status()).toMatchObject({ state: 'paused', reason: 'model_busy' })
+    expect(f.runtime.status()).toMatchObject({ state: 'recovering', reason: 'model_busy' })
     expect(f.driver.dispatch).not.toHaveBeenCalled()
     await f.runtime.pause()
     await f.runtime.tick()
     expect(f.runtime.status().reason).toBe('user_pause')
+  })
+  it('recovers an initial connection failure without stealing focus again or consuming new messages', async () => {
+    const f = fixture()
+    const saved = { baseline: observation(), pending: false }
+    vi.mocked(f.driver.read).mockRejectedValueOnce(new Error('model_busy'))
+    expect(await f.runtime.start('Q', 'current_chat', undefined, saved)).toMatchObject({
+      state: 'recovering'
+    })
+    f.set(observation([msg('历史消息'), msg('断网期间的新消息')]))
+    await f.runtime.tick()
+    expect(f.driver.connect).toHaveBeenLastCalledWith(
+      'Q',
+      expect.any(AbortSignal),
+      'current_chat',
+      false
+    )
+    await f.runtime.tick()
+    expect(f.records).toHaveLength(1)
+    expect(f.records[0]).toMatchObject({ question: '断网期间的新消息', state: 'sent' })
+    await f.runtime.pause()
+  })
+  it('rechecks a pending receipt and continues the next round without redispatching the first reply', async () => {
+    const f = fixture()
+    await f.runtime.start('Q')
+    f.set(observation([msg('历史消息'), msg('第一问')]))
+    f.driver.dispatchFailure = vi.fn(() => ({
+      failureStage: 'receipt',
+      failureReason: 'send_echo_unverified'
+    }))
+    f.driver.verifyReceipt = vi.fn().mockResolvedValueOnce('unknown').mockResolvedValueOnce('sent')
+    vi.mocked(f.driver.dispatch).mockResolvedValueOnce('unknown')
+    await f.runtime.tick()
+    expect(f.runtime.status()).toMatchObject({ state: 'recovering', reason: 'send_verifying' })
+    const id = f.records[0].id
+    await f.runtime.start('B')
+    await f.runtime.tick()
+    expect(f.driver.dispatch).toHaveBeenCalledTimes(1)
+    expect(f.driver.generate).toHaveBeenCalledTimes(1)
+    f.set(
+      observation([msg('历史消息'), msg('第一问'), msg('你好，已收到', 'outbound'), msg('第二问')])
+    )
+    await f.runtime.tick()
+    expect(f.records).toHaveLength(1)
+    expect(f.records[0]).toMatchObject({ id, state: 'sent' })
+    await f.runtime.tick()
+    expect(f.records.map((row) => row.question)).toEqual(['第一问', '第二问'])
+    expect(f.driver.dispatch).toHaveBeenCalledTimes(2)
+    await f.runtime.pause()
+  })
+  it('retains an unresolved receipt across pause and does not verify or send after a manual stop', async () => {
+    const f = fixture()
+    await f.runtime.start('Q')
+    f.set(observation([msg('历史消息'), msg('第一问')]))
+    f.driver.dispatchFailure = vi.fn(() => ({
+      failureStage: 'receipt',
+      failureReason: 'send_echo_unverified'
+    }))
+    f.driver.verifyReceipt = vi.fn().mockResolvedValue('unknown')
+    vi.mocked(f.driver.dispatch).mockResolvedValueOnce('unknown')
+    await f.runtime.tick()
+    await f.runtime.pause()
+    await f.runtime.tick()
+    expect(f.driver.verifyReceipt).not.toHaveBeenCalled()
+    expect(f.records[0].state).toBe('unknown')
+    expect(await f.runtime.start('Q')).toMatchObject({ state: 'paused', reason: 'send_unknown' })
+    expect(f.driver.dispatch).toHaveBeenCalledTimes(1)
   })
   it('keeps the previous own echo durable if a new inbound generation fails', async () => {
     const f = fixture()
@@ -266,7 +372,12 @@ describe('project-owned foreground WeChat runtime', () => {
       if (kind === 'input') current.inputText = '人工草稿'
       f.set(current)
       await f.runtime.start('Q', 'current_chat')
-      expect(f.driver.connect).toHaveBeenCalledWith('Q', expect.any(AbortSignal), 'current_chat')
+      expect(f.driver.connect).toHaveBeenCalledWith(
+        'Q',
+        expect.any(AbortSignal),
+        'current_chat',
+        true
+      )
       expect(f.runtime.status().state).toBe('paused')
       expect(f.driver.generate).not.toHaveBeenCalled()
       expect(f.driver.dispatch).not.toHaveBeenCalled()

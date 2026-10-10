@@ -12,6 +12,80 @@ export interface TextBubble {
   height: number
   fingerprint: string
 }
+/** Keep partially clipped messages below the title out of the header anchor. */
+export function chatHeaderBottom(
+  image: BubblePixels,
+  left: number,
+  hint: number
+): number | undefined {
+  const candidates: number[] = []
+  let last = -2
+  for (
+    let row = Math.max(3, Math.floor((hint - 0.08) * image.height));
+    row < Math.min(image.height * 0.25, (hint + 0.08) * image.height);
+    row++
+  ) {
+    let total = 0,
+      line = 0
+    for (let col = Math.floor(left * image.width) + 16; col < image.width - 20; col += 8) {
+      total++
+      const i = (row * image.width + col) * 4,
+        r = image.data[i],
+        g = image.data[i + 1],
+        b = image.data[i + 2]
+      if (
+        r >= 215 &&
+        r <= 247 &&
+        Math.max(r, g, b) - Math.min(r, g, b) <= 3 &&
+        image.data[i - image.width * 12] >= 248
+      )
+        line++
+    }
+    if (total && line / total > 0.9) {
+      if (last !== row - 1) candidates.push(row)
+      last = row
+    }
+  }
+  const row = candidates.sort(
+    (a, b) => Math.abs((a + 1) / image.height - hint) - Math.abs((b + 1) / image.height - hint)
+  )[0]
+  return row === undefined ? undefined : (row + 1) / image.height
+}
+/** Locate the thin, full-width divider above the editor in the light theme.
+ * Narrow message decorations cannot establish an editor boundary. */
+export function chatInputTop(image: BubblePixels, left: number, hint: number): number | undefined {
+  const candidates: number[] = []
+  let lastLineRow = -2
+  const start = Math.max(3, Math.floor(Math.max(0.4, hint - 0.25) * image.height))
+  const end = Math.min(image.height - 3, Math.floor(Math.min(0.95, hint + 0.25) * image.height))
+  for (let row = start; row < end; row++) {
+    let total = 0,
+      divider = 0
+    for (let col = Math.floor(left * image.width) + 16; col < image.width - 20; col += 8) {
+      total++
+      const i = (row * image.width + col) * 4
+      const r = image.data[i],
+        g = image.data[i + 1],
+        b = image.data[i + 2]
+      if (
+        r >= 215 &&
+        r <= 244 &&
+        Math.max(r, g, b) - Math.min(r, g, b) <= 3 &&
+        image.data[i - image.width * 4 * 3] >= 245 &&
+        image.data[i + image.width * 4 * 3] >= 245
+      )
+        divider++
+    }
+    if (total && divider / total > 0.9) {
+      if (lastLineRow !== row - 1) candidates.push(row)
+      lastLineRow = row
+    }
+  }
+  const row = candidates.sort(
+    (a, b) => Math.abs(a / image.height - hint) - Math.abs(b / image.height - hint)
+  )[0]
+  return row === undefined ? undefined : row / image.height
+}
 /** Read-only geometry for WeChat's uniform, tailed text bubbles. Images and avatars
  * lack that shape. Unsupported themes return no candidates and use visual reading. */
 export function textBubbles(image: BubblePixels, area: readonly number[]): TextBubble[] {

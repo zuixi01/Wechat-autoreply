@@ -6,6 +6,30 @@ import { randomUUID } from 'node:crypto'
 import { SqliteForegroundJournal } from '../../src/core/persistence/foreground-journal'
 
 describe('foreground durable execution journal', () => {
+  it('keeps generated wording scoped to its contact, including unsent drafts', () => {
+    const journal = new SqliteForegroundJournal(':memory:')
+    try {
+      const record = {
+        id: randomUUID(),
+        target: 'Q',
+        question: '问题',
+        reply: '模型的旧回复',
+        state: 'not_sent' as const,
+        createdAt: 1
+      }
+      journal.save(record)
+      journal.save({
+        ...record,
+        id: randomUUID(),
+        target: 'B',
+        reply: '另一个对象的回复',
+        createdAt: 2
+      })
+      expect(journal.generatedReplies('Q')).toEqual(['模型的旧回复'])
+    } finally {
+      journal.close()
+    }
+  })
   it('retains unknown execution after close and reopen, and updates only the same execution', () => {
     const directory = mkdtempSync(join(tmpdir(), 'foreground-journal-')),
       path = join(directory, 'journal.sqlite')

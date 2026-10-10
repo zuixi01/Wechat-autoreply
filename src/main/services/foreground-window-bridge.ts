@@ -24,6 +24,7 @@ const StateSchema = z.strictObject({
   ok: z.literal(true),
   windows: z.array(ForegroundWindowSchema).max(16),
   foreground: z.string().regex(/^\d+$/),
+  occluded: z.boolean().optional(),
   editorText: z.string().max(4096).nullable().optional()
 })
 export type ForegroundWindow = z.infer<typeof ForegroundWindowSchema>
@@ -190,6 +191,7 @@ export class ForegroundWindowBridge implements ForegroundWindows {
             [
               'window_changed',
               'foreground_lost',
+              'screen_obscured',
               'text_invalid',
               'input_failed',
               'input_state_changed',

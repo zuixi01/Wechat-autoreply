@@ -18,7 +18,12 @@ export interface ForegroundDriver {
   receiptText?(): string | undefined
   receiptFingerprint?(): string | undefined
   seed?(messages: ForegroundObservation['messages']): void
-  connect(target: string, signal: AbortSignal, mode?: ForegroundConnectionMode): Promise<void>
+  connect(
+    target: string,
+    signal: AbortSignal,
+    mode?: ForegroundConnectionMode,
+    focus?: boolean
+  ): Promise<void>
   read(signal: AbortSignal, fresh?: boolean): Promise<ForegroundObservation>
   generate(
     observation: ForegroundObservation,
@@ -30,6 +35,11 @@ export interface ForegroundDriver {
     text: string,
     signal: AbortSignal
   ): Promise<'sent' | 'not_sent' | 'unknown'>
+  verifyReceipt?(
+    observation: ForegroundObservation,
+    text: string,
+    signal: AbortSignal
+  ): Promise<'sent' | 'unknown'>
 }
 export interface ForegroundJournal {
   list(limit?: number): ForegroundRecord[]
@@ -71,6 +81,17 @@ export class ForegroundWechatRuntime {
   private recoveryAttempts = 0
   private lastReplyDurationMs?: number
   private nextRetryAt?: number
+  private connection?: {
+    mode: ForegroundConnectionMode
+    pending?: { count: number; preview: string }
+    restored?: ForegroundCheckpoint
+    retried: boolean
+  }
+  private pendingReceipt?: {
+    record: ForegroundRecord
+    observation: ForegroundObservation
+    started: number
+  }
   constructor(
     private readonly driver: ForegroundDriver,
     private readonly journal: ForegroundJournal,
@@ -115,56 +136,17 @@ export class ForegroundWechatRuntime {
     this.ownEchoFingerprint = restored?.ownEchoFingerprint
     this.pendingWork = restored?.pending ?? false
     this.baseline = restored?.baseline
+    this.pendingReceipt = undefined
+    this.connection = { mode, pending, restored, retried: false }
     const controller = new AbortController()
     this.controller = controller
     const work = (async () => {
       try {
-        await this.driver.connect(this.target, controller.signal, mode)
-        if (controller.signal.aborted) return
-        if (restored)
-          this.driver.seed?.([
-            ...restored.baseline.messages,
-            ...(restored.ownEcho && restored.ownEchoFingerprint
-              ? [
-                  {
-                    direction: 'outbound' as const,
-                    text: restored.ownEcho,
-                    pixelFingerprint: restored.ownEchoFingerprint
-                  }
-                ]
-              : [])
-          ])
-        const baseline = ForegroundObservationSchema.parse(
-          await this.driver.read(controller.signal)
-        )
-        if (controller.signal.aborted) return
-        this.validate(baseline)
-        this.driver.accept?.(baseline)
-        if (restored) {
-          // Do not consume the unread tail by replacing a durable baseline on restart.
-        } else if (pending) {
-          const { count, preview } = pending
-          const messages = baseline.messages.slice(-count)
-          const prefix = preview.replace(/(?:\.\.\.|…)$/, '').trim()
-          if (
-            !Number.isInteger(count) ||
-            count < 1 ||
-            count > 80 ||
-            messages.length !== count ||
-            messages.some((message) => message.direction !== 'inbound') ||
-            !prefix ||
-            !messages.at(-1)?.text.startsWith(prefix)
-          )
-            throw new Error('unread_message_unverified')
-          this.baseline = { ...baseline, messages: baseline.messages.slice(0, -count) }
-          this.pendingWork = true
-        } else this.baseline = baseline
-        this.changed()
-        this.state = 'running'
-        this.schedule()
+        await this.establish(controller.signal)
       } catch (error) {
-        if (!controller.signal.aborted) this.stopWith(this.code(error))
+        if (!controller.signal.aborted) this.recover(error)
       }
+      this.schedule()
     })()
     this.work = work
     try {
@@ -173,6 +155,56 @@ export class ForegroundWechatRuntime {
       if (this.work === work) this.work = undefined
     }
     return this.status()
+  }
+  private async establish(signal: AbortSignal): Promise<void> {
+    const connection = this.connection!
+    const focus = !connection.retried
+    connection.retried = true
+    await this.driver.connect(this.target, signal, connection.mode, focus)
+    if (signal.aborted) return
+    const { restored, pending } = connection
+    if (restored)
+      this.driver.seed?.([
+        ...restored.baseline.messages,
+        ...(restored.ownEcho && restored.ownEchoFingerprint
+          ? [
+              {
+                direction: 'outbound' as const,
+                text: restored.ownEcho,
+                pixelFingerprint: restored.ownEchoFingerprint
+              }
+            ]
+          : [])
+      ])
+    const baseline = ForegroundObservationSchema.parse(await this.driver.read(signal))
+    if (signal.aborted) return
+    this.validate(baseline)
+    this.driver.accept?.(baseline)
+    if (!restored) {
+      if (pending) {
+        const { count, preview } = pending,
+          messages = baseline.messages.slice(-count)
+        const prefix = preview.replace(/(?:\.\.\.|…)$/, '').trim()
+        if (
+          !Number.isInteger(count) ||
+          count < 1 ||
+          count > 80 ||
+          messages.length !== count ||
+          messages.some((message) => message.direction !== 'inbound') ||
+          !prefix ||
+          !messages.at(-1)?.text.startsWith(prefix)
+        )
+          throw new Error('unread_message_unverified')
+        this.baseline = { ...baseline, messages: baseline.messages.slice(0, -count) }
+        this.pendingWork = true
+      } else this.baseline = baseline
+    }
+    this.connection = undefined
+    this.state = 'running'
+    this.reason = 'none'
+    this.recoveryAttempts = 0
+    this.nextRetryAt = undefined
+    this.changed()
   }
   async pause(): Promise<ForegroundStatus> {
     this.stopWith('user_pause')
@@ -226,6 +258,19 @@ export class ForegroundWechatRuntime {
     const code = error instanceof Error ? error.message : ''
     return /^[a-z_]{1,128}$/.test(code) ? code : 'read_failed'
   }
+  private recover(error: unknown): void {
+    const code = this.code(error)
+    if (code === 'foreground_lost' || code === 'screen_obscured') {
+      this.state = 'waiting_foreground'
+      this.reason = code
+    } else if (transient.has(code) && (code !== 'message_gap' || this.recoveryAttempts < 2)) {
+      // Read/generation failures never authorize sending; keep waiting at a
+      // capped interval instead of requiring a manual restart after an outage.
+      this.recoveryAttempts = Math.min(6, this.recoveryAttempts + 1)
+      this.state = 'recovering'
+      this.reason = code
+    } else this.stopWith(code)
+  }
   private validate(next: ForegroundObservation): void {
     if (next.contact !== this.target || !next.privateChat) throw new Error('contact_mismatch')
     if (next.inputText.trim()) throw new Error('human_input')
@@ -248,13 +293,41 @@ export class ForegroundWechatRuntime {
     if (
       !['running', 'waiting_foreground', 'recovering'].includes(this.state) ||
       !controller ||
-      !baseline ||
       controller.signal.aborted
     )
       return
     const signal = controller.signal
     const started = Date.now()
     try {
+      if (this.connection) {
+        await this.establish(signal)
+        return
+      }
+      if (this.pendingReceipt) {
+        const pending = this.pendingReceipt
+        const outcome = await this.driver.verifyReceipt!(
+          pending.observation,
+          pending.record.reply,
+          signal
+        )
+        if (outcome !== 'sent') {
+          if (!signal.aborted) {
+            if (this.driver.dispatchFailure?.()?.failureReason !== 'send_echo_unverified') {
+              this.stopWith('send_unknown')
+              return
+            }
+            this.state = 'recovering'
+            this.reason = 'send_verifying'
+            this.recoveryAttempts = Math.min(6, this.recoveryAttempts + 1)
+          }
+          return
+        }
+        this.journal.save({ ...pending.record, state: 'sent' })
+        this.confirm(pending.observation, pending.record.reply, pending.started)
+        this.pendingReceipt = undefined
+        return
+      }
+      if (!baseline) return
       const next = ForegroundObservationSchema.parse(
         await this.driver.read(signal, this.state === 'recovering')
       )
@@ -336,11 +409,30 @@ export class ForegroundWechatRuntime {
       const failure = outcome === 'sent' ? undefined : this.driver.dispatchFailure?.()
       this.journal.save({ ...record, state: outcome, ...failure })
       if (outcome === 'unknown') {
+        if (
+          !signal.aborted &&
+          failure?.failureStage === 'receipt' &&
+          failure.failureReason === 'send_echo_unverified' &&
+          this.driver.verifyReceipt
+        ) {
+          this.pendingReceipt = { record, observation: current, started }
+          this.state = 'recovering'
+          this.reason = 'send_verifying'
+          this.recoveryAttempts = 1
+          return
+        }
         this.stopWith('send_unknown')
         return
       }
       if (outcome === 'not_sent') {
         if (!signal.aborted) {
+          if (
+            failure?.failureStage === 'before_input' &&
+            failure.failureReason === 'screen_obscured'
+          ) {
+            this.recover(new Error('screen_obscured'))
+            return
+          }
           if (
             failure?.failureStage === 'before_input' &&
             ['send_screen_changed', 'foreground_lost', 'window_query_failed'].includes(
@@ -355,36 +447,28 @@ export class ForegroundWechatRuntime {
         }
         return
       }
-      this.baseline = next
-      this.ownEcho = this.driver.receiptText?.() ?? record.reply
-      this.ownEchoFingerprint = this.driver.receiptFingerprint?.()
-      this.pendingWork = false
-      this.recoveryAttempts = 0
-      this.lastReplyDurationMs = Date.now() - started
-      this.changed()
+      this.confirm(next, record.reply, started)
       // A pause racing a positive receipt must still persist the echo marker;
       // otherwise restart mistakes our own reply for an untracked human reply.
       if (signal.aborted) return
       this.state = 'running'
     } catch (error) {
       if (!signal.aborted) {
-        const code = this.code(error)
-        if (code === 'foreground_lost') {
-          // Keep the original baseline; a returning window must pass every validation again.
-          // Dispatch failures are handled above and never enter this recovery branch.
-          this.state = 'waiting_foreground'
-          this.reason = code
-        } else if (
-          transient.has(code) &&
-          this.recoveryAttempts < (code === 'message_gap' ? 2 : 6)
-        ) {
-          // This branch runs before dispatch. Durable messages and echo markers
-          // survive retries; a failed/uncertain dispatch never reaches it.
-          this.recoveryAttempts++
-          this.state = 'recovering'
-          this.reason = code
-        } else this.stopWith(code)
+        this.recover(error)
       }
     }
+  }
+  private confirm(observation: ForegroundObservation, reply: string, started: number): void {
+    this.baseline = observation
+    this.ownEcho = this.driver.receiptText?.() ?? reply
+    this.ownEchoFingerprint = this.driver.receiptFingerprint?.()
+    this.pendingWork = false
+    this.recoveryAttempts = 0
+    this.lastReplyDurationMs = Date.now() - started
+    this.changed()
+    if (this.controller?.signal.aborted) return
+    this.reason = 'none'
+    this.nextRetryAt = undefined
+    this.state = 'running'
   }
 }

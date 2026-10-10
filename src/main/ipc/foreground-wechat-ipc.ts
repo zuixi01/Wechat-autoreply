@@ -9,6 +9,7 @@ import { ForegroundWechatRuntime } from '../../core/agent/foreground-wechat'
 import { ForegroundBatchRuntime } from '../../core/agent/foreground-batch'
 import { ForegroundBatchNavigator } from '../services/foreground-batch-navigator'
 import { BatchStartSchema } from '../../shared/contracts/foreground-batch'
+import { ownerStyleExamples } from '../../shared/reply-persona'
 import { SqliteForegroundJournal } from '../../core/persistence/foreground-journal'
 import {
   ForegroundWechatDriver,
@@ -27,19 +28,23 @@ export function registerForegroundWechatIpc(
   close: () => Promise<void>
 } {
   const journal = new SqliteForegroundJournal(join(userData, 'agent', 'foreground-wechat.sqlite'))
+  const configured = (target: string): ForegroundConfiguration => ({
+    ...configuration(target),
+    ownerStyle: (messages) => ownerStyleExamples(messages, journal.generatedReplies(target))
+  })
   const runtime = new ForegroundWechatRuntime(
-    new ForegroundWechatDriver(() => configuration(runtime.status().target)),
+    new ForegroundWechatDriver(() => configured(runtime.status().target)),
     journal,
     true,
     (value) => journal.saveSingle(value)
   )
   const batch = new ForegroundBatchRuntime(
     new ForegroundBatchNavigator(
-      new ForegroundWechatDriver(() => configuration(batch.status().targets[0] ?? 'Q')),
+      new ForegroundWechatDriver(() => configured(batch.status().targets[0] ?? 'Q')),
       () => batch.status().targets[0] ?? 'Q'
     ),
     (target) => {
-      const driver = new ForegroundWechatDriver(() => configuration(target))
+      const driver = new ForegroundWechatDriver(() => configured(target))
       return {
         connect: (_target, signal) => driver.connect(target, signal, 'current_chat', false),
         metrics: () => driver.metrics(),

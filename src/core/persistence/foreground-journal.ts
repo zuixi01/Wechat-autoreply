@@ -66,6 +66,14 @@ export class SqliteForegroundJournal implements ForegroundJournal, ForegroundBat
       .all()
       .map((row) => ForegroundRecordSchema.parse(JSON.parse(String(row.payload))))
   }
+  generatedReplies(target: string): string[] {
+    return this.db
+      .prepare(
+        "SELECT payload FROM foreground_replies WHERE json_extract(payload, '$.target')=? ORDER BY created_at DESC, rowid DESC LIMIT 500"
+      )
+      .all(target)
+      .map((row) => ForegroundRecordSchema.parse(JSON.parse(String(row.payload))).reply)
+  }
   loadSingle(target: string): ForegroundCheckpoint | undefined {
     const row = this.db
       .prepare('SELECT payload FROM foreground_single_checkpoints WHERE target=?')

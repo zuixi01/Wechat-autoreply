@@ -57,6 +57,19 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 describe('persistent pinned foreground helper', () => {
+  it('passes through the native visible-surface result without changing the window binding', async () => {
+    respond = (request) => ({
+      id: request.id,
+      ok: true,
+      windows: [],
+      foreground: '71',
+      occluded: true
+    })
+    expect(await bridge().inspect(new AbortController().signal)).toMatchObject({
+      occluded: true,
+      foreground: '71'
+    })
+  })
   it('waits for a cancelled paste to restore the clipboard before rejecting, without killing or retrying it', async () => {
     const value = bridge(),
       controller = new AbortController()
