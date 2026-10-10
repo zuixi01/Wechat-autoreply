@@ -47,6 +47,10 @@ export interface ForegroundJournal {
   unresolved?(): ForegroundRecord[]
   save(record: ForegroundRecord): void
 }
+export interface ForegroundUnreadHint {
+  count: number | null
+  preview: string
+}
 const active = new Set([
   'connecting',
   'running',
@@ -83,7 +87,7 @@ export class ForegroundWechatRuntime {
   private nextRetryAt?: number
   private connection?: {
     mode: ForegroundConnectionMode
-    pending?: { count: number; preview: string }
+    pending?: ForegroundUnreadHint
     restored?: ForegroundCheckpoint
     retried: boolean
   }
@@ -118,7 +122,7 @@ export class ForegroundWechatRuntime {
   async start(
     target: string,
     mode: ForegroundConnectionMode = 'search',
-    pending?: { count: number; preview: string },
+    pending?: ForegroundUnreadHint,
     restored?: ForegroundCheckpoint
   ): Promise<ForegroundStatus> {
     if (active.has(this.state) || this.work) return this.status()
@@ -182,20 +186,28 @@ export class ForegroundWechatRuntime {
     this.driver.accept?.(baseline)
     if (!restored) {
       if (pending) {
-        const { count, preview } = pending,
-          messages = baseline.messages.slice(-count)
+        const { count, preview } = pending
+        let start = baseline.messages.length
+        if (count === null) {
+          // A red dot identifies a new conversation, not the number of messages.
+          // Include the complete consecutive incoming turn, anchored by the last
+          // outgoing message (or the beginning of a short visible conversation).
+          while (start > 0 && baseline.messages[start - 1].direction === 'inbound') start--
+          if (start === 0 && baseline.messages.length === 80)
+            throw new Error('unread_message_unverified')
+        } else start -= count
+        const messages = baseline.messages.slice(Math.max(0, start))
         const prefix = preview.replace(/(?:\.\.\.|…)$/, '').trim()
         if (
-          !Number.isInteger(count) ||
-          count < 1 ||
-          count > 80 ||
-          messages.length !== count ||
+          (count !== null &&
+            (!Number.isInteger(count) || count < 1 || count > 80 || messages.length !== count)) ||
+          !messages.length ||
           messages.some((message) => message.direction !== 'inbound') ||
           !prefix ||
           !messages.at(-1)?.text.startsWith(prefix)
         )
           throw new Error('unread_message_unverified')
-        this.baseline = { ...baseline, messages: baseline.messages.slice(0, -count) }
+        this.baseline = { ...baseline, messages: baseline.messages.slice(0, start) }
         this.pendingWork = true
       } else this.baseline = baseline
     }

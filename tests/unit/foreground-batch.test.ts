@@ -50,6 +50,8 @@ function fixture(count = 15, persisted?: SqliteForegroundJournal) {
     list: (limit) => (persisted ? persisted.list(limit) : records),
     hasUnknown: () =>
       persisted ? persisted.hasUnknown() : records.some((record) => record.state === 'unknown'),
+    unresolved: () =>
+      persisted ? persisted.unresolved() : records.filter((record) => record.state === 'unknown'),
     save: (record) => {
       persisted?.save(record)
       const index = records.findIndex((value) => value.id === record.id)
@@ -114,6 +116,7 @@ function fixture(count = 15, persisted?: SqliteForegroundJournal) {
     observations,
     records,
     journal,
+    factory,
     maxSending: () => maxSending,
     foreground: (value: boolean) => {
       foreground = value
@@ -121,6 +124,166 @@ function fixture(count = 15, persisted?: SqliteForegroundJournal) {
   }
 }
 describe('foreground batch scanning and processing', () => {
+  it('shows an older unknown send ahead of the recent records when startup is blocked', async () => {
+    const db = new SqliteForegroundJournal(':memory:'),
+      f = fixture(1, db)
+    try {
+      const unknown: ForegroundRecord = {
+        id: randomUUID(),
+        target: '客户0',
+        question: '旧消息',
+        reply: '待核对回复',
+        state: 'unknown',
+        createdAt: 0
+      }
+      db.save(unknown)
+      for (let i = 1; i <= 51; i++)
+        db.save({ ...unknown, id: randomUUID(), state: 'sent', createdAt: i })
+      await f.runtime.start(['客户0'])
+      expect(f.runtime.status()).toMatchObject({ state: 'paused', reason: 'send_unknown' })
+      expect(f.runtime.status().records[0].id).toBe(unknown.id)
+      expect(f.navigator.open).not.toHaveBeenCalled()
+    } finally {
+      await f.runtime.pause()
+      db.close()
+    }
+  })
+  it('continues a single-contact checkpoint when entering batch mode without replying to old messages', async () => {
+    const db = new SqliteForegroundJournal(':memory:'),
+      f = fixture(1, db)
+    try {
+      const old = structuredClone(f.observations.get('客户0')!)
+      db.saveSingle({ baseline: old, ownEcho: '上次已发送', pending: false })
+      f.observations
+        .get('客户0')!
+        .messages.push(
+          { direction: 'outbound', text: '上次已发送' },
+          { direction: 'inbound', text: '这次的新问题' }
+        )
+      f.rows[0].preview = '这次的新问题'
+      await f.runtime.start(['客户0'])
+      await f.runtime.tick()
+      expect(f.records).toHaveLength(1)
+      expect(f.records[0].question).toBe('这次的新问题')
+      expect(db.loadSingle('客户0')?.ownEcho).toBe('回复客户0')
+      expect(db.loadBatch(['客户0'], true)[0].checkpoint).toEqual(db.loadSingle('客户0'))
+    } finally {
+      await f.runtime.pause()
+      db.close()
+    }
+  })
+  it('switches to verified dot conversations and processes all consecutive incoming text once', async () => {
+    const f = fixture(2)
+    f.rows[0].unread = null
+    f.rows[0].unreadDot = true
+    f.rows[0].preview = '第二个问题'
+    f.observations.get('客户0')!.messages.push({ direction: 'inbound', text: '第二个问题' })
+    await f.runtime.start(['客户0', '客户1'])
+    await f.runtime.tick()
+    await f.runtime.tick()
+    await f.runtime.tick()
+    expect(f.records.map((row) => row.target)).toEqual(['客户0', '客户1'])
+    expect(f.records[0].question).toBe('问题0\n第二个问题')
+    expect(f.maxSending()).toBe(1)
+  })
+  it('never guesses an unreadable numeric badge and can retry after the badge becomes clear', async () => {
+    const f = fixture(1)
+    f.rows[0].unread = null
+    await f.runtime.start(['客户0'])
+    await f.runtime.tick()
+    expect(f.navigator.open).not.toHaveBeenCalled()
+    expect(f.runtime.status().issues[0].reason).toBe('unread_message_unverified')
+    f.rows[0].unread = 1
+    await f.runtime.tick()
+    expect(f.records).toHaveLength(1)
+  })
+  it('restores completed baselines and handles identical new text after restart without replaying old replies', async () => {
+    const db = new SqliteForegroundJournal(':memory:'),
+      f = fixture(2, db)
+    const second = new ForegroundBatchRuntime(f.navigator, f.factory, f.journal, false, db)
+    try {
+      await f.runtime.start(['客户0', '客户1'])
+      await f.runtime.tick()
+      await f.runtime.tick()
+      await f.runtime.pause()
+      expect(db.loadBatch(['客户0', '客户1'], true)).toHaveLength(2)
+      expect(db.loadSingle('客户0')?.ownEcho).toBe('回复客户0')
+      f.observations.get('客户0')!.messages.push({ direction: 'inbound', text: '问题0' })
+      f.rows[0].unread = 1
+      await second.start(['客户0', '客户1'])
+      await second.tick()
+      await second.tick()
+      await second.tick()
+      expect(f.records).toHaveLength(3)
+      expect(f.records[2]).toMatchObject({ target: '客户0', question: '问题0', state: 'sent' })
+    } finally {
+      await f.runtime.pause()
+      await second.pause()
+      db.close()
+    }
+  })
+  it('recovers repeated inventory failures without losing unread jobs or stealing focus again', async () => {
+    const f = fixture(1)
+    vi.mocked(f.navigator.connect).mockRejectedValueOnce(new Error('model_network_failed'))
+    await f.runtime.start(['客户0'])
+    expect(f.runtime.status().state).toBe('recovering')
+    vi.mocked(f.navigator.page).mockRejectedValue(new Error('model_timeout'))
+    for (let i = 0; i < 9; i++) await f.runtime.tick()
+    expect(f.runtime.status().state).toBe('recovering')
+    expect(f.records).toHaveLength(0)
+    expect(f.navigator.connect).toHaveBeenLastCalledWith(expect.any(AbortSignal), false)
+    vi.mocked(f.navigator.page).mockResolvedValue({
+      rows: structuredClone(f.rows),
+      atTop: true,
+      atBottom: true
+    })
+    await f.runtime.tick()
+    expect(f.records).toHaveLength(1)
+  })
+  it('waits through notification obstruction and continues the same queued contact', async () => {
+    const f = fixture(1)
+    await f.runtime.start(['客户0'])
+    const original = vi.mocked(f.navigator.page).getMockImplementation()!
+    vi.mocked(f.navigator.page).mockRejectedValue(new Error('screen_obscured'))
+    await f.runtime.tick()
+    expect(f.runtime.status()).toMatchObject({
+      state: 'waiting_foreground',
+      reason: 'screen_obscured'
+    })
+    vi.mocked(f.navigator.page).mockImplementation(original)
+    await f.runtime.tick()
+    expect(f.records).toHaveLength(1)
+  })
+  it('holds other contacts during delayed receipt verification and never types or sends again', async () => {
+    const f = fixture(2)
+    const driver: ForegroundDriver = {
+      connect: async () => {},
+      read: async () => structuredClone(f.observations.get('客户0')!),
+      generate: vi.fn(async () => '回复'),
+      dispatch: vi.fn(async () => 'unknown' as const),
+      dispatchFailure: () => ({ failureStage: 'receipt', failureReason: 'send_echo_unverified' }),
+      verifyReceipt: vi.fn(async () => 'unknown' as 'sent' | 'unknown')
+    }
+    const runtime = new ForegroundBatchRuntime(f.navigator, () => driver, f.journal, false)
+    await runtime.start(['客户0', '客户1'])
+    await runtime.tick()
+    await runtime.tick()
+    expect(runtime.status()).toMatchObject({
+      state: 'recovering',
+      reason: 'send_verifying',
+      current: '客户0'
+    })
+    expect(driver.generate).toHaveBeenCalledTimes(1)
+    expect(driver.dispatch).toHaveBeenCalledTimes(1)
+    expect(f.navigator.open).toHaveBeenCalledTimes(1)
+    vi.mocked(driver.verifyReceipt!).mockResolvedValue('sent')
+    await runtime.tick()
+    expect(f.records).toHaveLength(1)
+    expect(f.records[0].state).toBe('sent')
+    expect(runtime.status().pending).toBe(1)
+    expect(driver.dispatch).toHaveBeenCalledTimes(1)
+    await runtime.pause()
+  })
   it('requires an explicit allowed scope and unread processing input', () => {
     expect(BatchStartSchema.safeParse({ targets: ['Q'], foregroundConsent: true }).success).toBe(
       false
@@ -280,7 +443,7 @@ describe('foreground batch scanning and processing', () => {
     await f.runtime.start(['客户0'])
     await f.runtime.tick()
     expect(f.runtime.status()).toMatchObject({
-      state: 'paused',
+      state: 'recovering',
       reason: 'list_incomplete',
       scanComplete: false
     })

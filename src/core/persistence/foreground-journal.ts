@@ -84,12 +84,30 @@ export class SqliteForegroundJournal implements ForegroundJournal, ForegroundBat
     return value
   }
   saveSingle(value: ForegroundCheckpoint): void {
+    this.transaction(() => this.writeSingle(value))
+  }
+  private transaction(write: () => void): void {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      write()
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+  private writeSingle(value: ForegroundCheckpoint): void {
     const valid = ForegroundCheckpointSchema.parse(value)
     this.db
       .prepare(
         'INSERT INTO foreground_single_checkpoints VALUES (?,?) ON CONFLICT(target) DO UPDATE SET payload=excluded.payload'
       )
       .run(valid.baseline.contact, JSON.stringify(valid))
+    this.db
+      .prepare(
+        "UPDATE foreground_batch_checkpoints SET payload=json_set(payload,'$.checkpoint',json(?)) WHERE target=?"
+      )
+      .run(JSON.stringify(valid), valid.baseline.contact)
   }
   clearSingle(target: string): void {
     this.db.prepare('DELETE FROM foreground_single_checkpoints WHERE target=?').run(target)
@@ -116,11 +134,14 @@ export class SqliteForegroundJournal implements ForegroundJournal, ForegroundBat
       throw error
     }
   }
-  loadBatch(targets: string[]): { row: ListRow; checkpoint?: ForegroundCheckpoint }[] {
+  loadBatch(
+    targets: string[],
+    includeCompleted = false
+  ): { row: ListRow; checkpoint?: ForegroundCheckpoint }[] {
     if (!targets.length) return []
     return this.db
       .prepare(
-        `SELECT payload FROM foreground_batch_checkpoints WHERE target IN (${targets.map(() => '?').join(',')}) AND coalesce(json_extract(payload, '$.checkpoint.pending'),1)=1`
+        `SELECT payload FROM foreground_batch_checkpoints WHERE target IN (${targets.map(() => '?').join(',')})${includeCompleted ? '' : " AND coalesce(json_extract(payload, '$.checkpoint.pending'),1)=1"}`
       )
       .all(...targets)
       .map((row) => {
@@ -145,11 +166,14 @@ export class SqliteForegroundJournal implements ForegroundJournal, ForegroundBat
   saveBatch(row: ListRow, checkpoint: ForegroundCheckpoint): void {
     const value = BatchCheckpointSchema.parse({ row, checkpoint })
     if (checkpoint.baseline.contact !== row.name) throw new Error('contact_mismatch')
-    this.db
-      .prepare(
-        'INSERT INTO foreground_batch_checkpoints VALUES (?,?) ON CONFLICT(target) DO UPDATE SET payload=excluded.payload'
-      )
-      .run(row.name, JSON.stringify(value))
+    this.transaction(() => {
+      this.db
+        .prepare(
+          'INSERT INTO foreground_batch_checkpoints VALUES (?,?) ON CONFLICT(target) DO UPDATE SET payload=excluded.payload'
+        )
+        .run(row.name, JSON.stringify(value))
+      this.writeSingle(checkpoint)
+    })
   }
   save(record: ForegroundRecord): void {
     const valid = ForegroundRecordSchema.parse(record)

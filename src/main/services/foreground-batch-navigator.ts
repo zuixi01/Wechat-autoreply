@@ -13,10 +13,10 @@ export class ForegroundBatchNavigator implements BatchNavigator {
     private readonly driver: ForegroundWechatDriver,
     private readonly target: () => string
   ) {}
-  async connect(signal: AbortSignal): Promise<void> {
+  async connect(signal: AbortSignal, focus = true): Promise<void> {
     this.prepared = false
     this.current = ''
-    await this.driver.connect(this.target(), signal, 'current_chat')
+    await this.driver.connect(this.target(), signal, 'current_chat', focus)
     await this.driver.showChatList(signal)
     this.prepared = true
   }
@@ -46,7 +46,8 @@ export class ForegroundBatchNavigator implements BatchNavigator {
   down(signal: AbortSignal): Promise<void> {
     return this.driver.listScroll(false, signal)
   }
-  open(row: ListRow, signal: AbortSignal): Promise<void> {
-    return this.driver.listOpen(row, signal)
+  async open(row: ListRow, signal: AbortSignal): Promise<void> {
+    await this.driver.listOpen(row, signal)
+    this.current = row.name
   }
 }

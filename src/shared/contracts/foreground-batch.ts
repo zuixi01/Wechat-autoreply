@@ -26,6 +26,17 @@ export const ListRowSchema = z.strictObject({
   nameComplete: z.boolean(),
   preview: z.string().max(4096),
   unread: z.number().int().min(0).max(9999).nullable(),
+  unreadDot: z.boolean().optional(),
+  badge: z
+    .tuple([
+      z.number().min(0).max(1),
+      z.number().min(0).max(1),
+      z.number().positive().max(1),
+      z.number().positive().max(1)
+    ])
+    .refine(([x, y, w, h]) => x + w <= 1.001 && y + h <= 1.001)
+    .nullable()
+    .optional(),
   point: z.tuple([z.number().min(0).max(1), z.number().min(0).max(1)])
 })
 export type ListRow = z.infer<typeof ListRowSchema>
@@ -37,14 +48,22 @@ export interface ListPage {
 }
 export interface BatchNavigator {
   currentContact?(): string
-  connect(signal: AbortSignal): Promise<void>
+  connect(signal: AbortSignal, focus?: boolean): Promise<void>
   top(signal: AbortSignal): Promise<void>
   page(signal: AbortSignal): Promise<ListPage>
   down(signal: AbortSignal): Promise<void>
   open(row: ListRow, signal: AbortSignal): Promise<void>
 }
 export const BatchStatusSchema = z.strictObject({
-  state: z.enum(['idle', 'connecting', 'scanning', 'processing', 'waiting_foreground', 'paused']),
+  state: z.enum([
+    'idle',
+    'connecting',
+    'scanning',
+    'processing',
+    'waiting_foreground',
+    'recovering',
+    'paused'
+  ]),
   reason: z.string().max(128),
   targets: z.array(name).max(500),
   current: z.string().max(128),
@@ -52,6 +71,7 @@ export const BatchStatusSchema = z.strictObject({
   pages: z.number().int().nonnegative(),
   pending: z.number().int().nonnegative(),
   scanComplete: z.boolean(),
+  nextRetryAt: z.number().nonnegative().optional(),
   issues: z
     .array(z.strictObject({ target: z.string().max(128), reason: z.string().max(128) }))
     .max(500),

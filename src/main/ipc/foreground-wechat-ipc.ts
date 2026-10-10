@@ -55,7 +55,9 @@ export function registerForegroundWechatIpc(
         accept: (observation) => driver.accept(observation),
         read: (signal, fresh) => driver.read(signal, fresh),
         generate: (observation, signal, incoming) => driver.generate(observation, signal, incoming),
-        dispatch: (observation, text, signal) => driver.dispatch(observation, text, signal)
+        dispatch: (observation, text, signal) => driver.dispatch(observation, text, signal),
+        verifyReceipt: (observation, text, signal) =>
+          driver.verifyReceipt(observation, text, signal)
       }
     },
     journal,

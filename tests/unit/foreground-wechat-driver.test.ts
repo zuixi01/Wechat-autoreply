@@ -1062,6 +1062,53 @@ describe('project foreground sender boundaries', () => {
     await advance(t.driver.listPage(t.signal))
     expect(f.fetch).toHaveBeenCalledTimes(calls + 1)
   })
+  it('verifies a plain unread dot using its current pixels and never guesses a count', async () => {
+    const t = await listed()
+    const png = PNG.sync.read(f.png)
+    for (let y = 142; y < 158; y++)
+      for (let x = 112; x < 128; x++)
+        if ((x - 119.5) ** 2 + (y - 149.5) ** 2 < 64)
+          png.data.set([250, 70, 75, 255], (y * 800 + x) * 4)
+    f.png = PNG.sync.write(png)
+    const list = listVisual()
+    f.fetch.mockResolvedValueOnce(
+      response({
+        ...list,
+        rows: [
+          {
+            ...list.rows[0],
+            unread: null,
+            unreadDot: true,
+            badge: [0.1375, 0.233333, 0.025, 0.033334]
+          }
+        ]
+      })
+    )
+    const next = await t.driver.listPage(t.signal)
+    expect(next.rows[0]).toMatchObject({ unread: null, unreadDot: true })
+    expect(await t.driver.listPage(t.signal)).toEqual(next)
+    expect(f.click).not.toHaveBeenCalled()
+  })
+  it('rejects a model hallucination of a red dot on unchanged white pixels', async () => {
+    const t = await listed()
+    f.revision = 'new-rules'
+    const list = listVisual()
+    f.fetch.mockResolvedValueOnce(
+      response({
+        ...list,
+        rows: [
+          {
+            ...list.rows[0],
+            unread: null,
+            unreadDot: true,
+            badge: [0.1375, 0.233333, 0.025, 0.033334]
+          }
+        ]
+      })
+    )
+    await expect(t.driver.listPage(t.signal)).rejects.toThrow('visual_response_invalid')
+    expect(f.click).not.toHaveBeenCalled()
+  })
   it('retries a single transient model connection failure without any desktop send action', async () => {
     const driver = new ForegroundWechatDriver(
       () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),

@@ -1,7 +1,27 @@
 import { describe, expect, it } from 'vitest'
-import { hasReplyIdentityLeak, ownerStyleExamples } from '../../src/shared/reply-persona'
+import {
+  formatWechatReply,
+  hasReplyIdentityLeak,
+  ownerStyleExamples
+} from '../../src/shared/reply-persona'
 
 describe('account owner reply identity boundary', () => {
+  it('keeps several sentences and emoji without a forced final full stop', () => {
+    expect(formatWechatReply('先把文件发来。\n我看完告诉你😄。')).toBe(
+      '先把文件发来。 我看完告诉你😄'
+    )
+    expect(formatWechatReply('收到。')).toBe('收到')
+    expect(formatWechatReply('你想先处理哪一项？')).toBe('你想先处理哪一项？')
+    expect(formatWechatReply('地址是 https://example.com/a.')).toBe('地址是 https://example.com/a.')
+  })
+  it('rejects malformed emoji noncharacters instead of sending invisible or garbled suffixes', () => {
+    expect(() => formatWechatReply('晚安' + String.fromCodePoint(0x5ffff))).toThrow(
+      'model_response_invalid'
+    )
+    expect(() => formatWechatReply('晚安\ud800')).toThrow('model_response_invalid')
+    expect(() => formatWechatReply('。')).toThrow('model_response_invalid')
+    expect(formatWechatReply('好嘞👨‍💻')).toBe('好嘞👨‍💻')
+  })
   it('uses owner wording but excludes incoming, generated and identity-template messages', () => {
     expect(
       ownerStyleExamples(

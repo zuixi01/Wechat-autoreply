@@ -5,6 +5,7 @@ const states: Record<BatchStatus['state'], string> = {
   idle: '未启动',
   connecting: '正在连接微信',
   scanning: '自动扫描会话列表',
+  recovering: '等待接口恢复后继续',
   processing: '正在处理客户消息',
   waiting_foreground: '等待微信回到前台',
   paused: '已暂停'
@@ -13,8 +14,10 @@ const reasons: Record<string, string> = {
   none: '',
   user_pause: '已停止批量回复。',
   foreground_lost: '切回微信后继续处理，无需重新启动。',
+  screen_obscured: '聊天被通知或其他窗口遮挡，移开后自动继续。',
+  send_verifying: '回复已尝试发送，正在核对回显，不会重复发送。',
   list_changed: '列表有新消息或排序变化，正在重新扫描。',
-  list_incomplete: '无法确认列表完整性，已停止；请放大微信窗口并保持普通聊天列表可见。',
+  list_incomplete: '暂时无法确认列表完整性，等待重新核对；请放大微信并保持普通聊天列表可见。',
   list_limit: '本轮扫描达到上限，未确认完整覆盖。请缩小联系人范围并检查列表。',
   list_unavailable: '请关闭微信弹窗、搜索结果或通讯录，回到普通聊天列表。',
   human_input: '输入框中有人工草稿，请处理草稿后重新启动。',
@@ -27,13 +30,15 @@ const reasons: Record<string, string> = {
   send_unknown: '发送结果无法确认，全部停止且不会重发，请核对微信中的回复。',
   send_cancelled: '发送前核对未通过，该联系人已暂停处理，请检查草稿。',
   model_not_configured: '请在主页选择已配置密钥的视觉模型和回复模型。',
-  model_network_failed: '模型连接失败，请在模型配置中测试连接。',
+  model_network_failed: '模型连接暂时失败，保留当前消息，恢复后继续。',
+  model_timeout: '模型暂时超时，保留当前消息，恢复后继续。',
+  model_busy: '模型服务繁忙，等待后继续。',
   rules_not_configured: '请先保存回复规则。',
   rules_changed: '规则或模型配置已变化，请重新启动。',
   reply_identity_invalid: '回复包含 AI 或虚拟身份的自我描述，已拦截且未发送，请检查规则。',
   window_changed: '微信窗口实例已变化，请重新启动。',
   wechat_window_unavailable: '未找到唯一的微信窗口，请先登录并关闭多开窗口。',
-  visual_response_invalid: '视觉识别格式校验失败，请检查视觉模型。'
+  visual_response_invalid: '识别结果无法核对，保留进度后重新读取。'
 }
 const reason = (value: string): string =>
   reasons[value] ?? '读取或校验失败，请检查微信窗口、模型配置和回复规则。'
@@ -131,7 +136,7 @@ export default function PersonalWechatBatchControls({
         个人微信批量自动回复
       </h2>
       <p className="enterprise-copy">
-        名单配置一次，启动后自动滚动扫描超过一屏的会话，排队打开并回复未读文字消息。无需逐个手动打开联系人。
+        名单配置一次，启动后自动扫描会话中的未读数字和小红点，依次切换到对应聊天并回复新文字。无需逐个手动打开联系人。
       </p>
       <label className="form-label" htmlFor="personal-wechat-batch-targets">
         允许自动回复的联系人（每行一个完整备注名）

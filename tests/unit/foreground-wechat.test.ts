@@ -52,6 +52,25 @@ function fixture(polling = false) {
   }
 }
 describe('project-owned foreground WeChat runtime', () => {
+  it('uses a verified dot to process the entire last incoming turn and ignores earlier turns', async () => {
+    const f = fixture()
+    f.set(observation([msg('旧问题'), msg('旧回复', 'outbound'), msg('新问题'), msg('补充新问题')]))
+    await f.runtime.start('Q', 'current_chat', { count: null, preview: '补充新问题' })
+    await f.runtime.tick()
+    expect(f.records).toHaveLength(1)
+    expect(f.records[0].question).toBe('新问题\n补充新问题')
+  })
+  it('refuses an unknown-count tail with an unverified preview or truncated maximum history', async () => {
+    const f = fixture()
+    f.set(observation(Array.from({ length: 80 }, () => msg('边界未知'))))
+    await f.runtime.start('Q', 'current_chat', { count: null, preview: '边界未知' })
+    expect(f.runtime.status().reason).toBe('unread_message_unverified')
+    expect(f.driver.generate).not.toHaveBeenCalled()
+    const g = fixture()
+    g.set(observation([msg('实际消息')]))
+    await g.runtime.start('Q', 'current_chat', { count: null, preview: '另一个消息' })
+    expect(g.runtime.status().reason).toBe('unread_message_unverified')
+  })
   it('retains progress through a long screen obstruction and continues when it clears', async () => {
     const f = fixture()
     await f.runtime.start('Q')

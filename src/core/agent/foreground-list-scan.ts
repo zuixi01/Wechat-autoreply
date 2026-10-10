@@ -2,7 +2,7 @@ import { hashContext } from '../reply/hashes'
 import type { BatchNavigator, ListRow } from '../../shared/contracts/foreground-batch'
 
 export const rowKey = (row: ListRow): string =>
-  hashContext([row.name, row.nameComplete, row.preview, row.unread])
+  hashContext([row.name, row.nameComplete, row.preview, row.unread, Boolean(row.unreadDot)])
 export const mayMatchTruncatedName = (row: ListRow, name: string): boolean =>
   !row.nameComplete && name.startsWith(row.name.replace(/(?:\.\.\.|…)$/, '').trim())
 /** A traversed screenshot list is not a directory of stable native customer IDs. */
