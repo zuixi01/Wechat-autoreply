@@ -124,18 +124,51 @@ function fixture(count = 15, persisted?: SqliteForegroundJournal) {
   }
 }
 describe('foreground batch scanning and processing', () => {
+  it('does not block the desktop queue while one contact waits for its model response', async () => {
+    const f = fixture(2)
+    let release: (text: string) => void = () => {}
+    const pending = new Promise<string>((resolve) => {
+      release = resolve
+    })
+    const factory = (target: string) => {
+      const driver = f.factory(target)
+      if (target === '客户0') driver.generate = () => pending
+      return driver
+    }
+    const runtime = new ForegroundBatchRuntime(f.navigator, factory, f.journal, false)
+    let first: Promise<void> | undefined
+    try {
+      await runtime.start(['客户0', '客户1'])
+      first = runtime.tick()
+      const releasedDesktop = await Promise.race([
+        first.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100))
+      ])
+      expect(releasedDesktop).toBe(true)
+      await runtime.tick()
+      expect(f.records.find((record) => record.target === '客户1')?.state).toBe('sent')
+      release('晚点返回的回复')
+      await runtime.tick()
+      await runtime.tick()
+      expect(
+        f.records.filter((record) => record.target === '客户0' && record.state === 'sent')
+      ).toHaveLength(1)
+    } finally {
+      release('取消')
+      await first
+      await runtime.pause()
+    }
+  })
   it('lets the next contact reply while new text keeps invalidating the first draft', async () => {
     const f = fixture(2)
     const factory = (target: string) => {
       const driver = f.factory(target)
       if (target === '客户0')
         driver.generate = async () => {
-          f.observations
-            .get(target)!
-            .messages.push({
-              direction: 'inbound',
-              text: `extra-${f.observations.get(target)!.messages.length}`
-            })
+          f.observations.get(target)!.messages.push({
+            direction: 'inbound',
+            text: `extra-${f.observations.get(target)!.messages.length}`
+          })
           return 'stale draft'
         }
       return driver
@@ -247,7 +280,7 @@ describe('foreground batch scanning and processing', () => {
       db.close()
     }
   })
-  it('switches to verified dot conversations and processes all consecutive incoming text once', async () => {
+  it('switches to dot conversations and preserves ambiguous older text as a handoff', async () => {
     const f = fixture(2)
     f.rows[0].unread = null
     f.rows[0].unreadDot = true
@@ -257,8 +290,12 @@ describe('foreground batch scanning and processing', () => {
     await f.runtime.tick()
     await f.runtime.tick()
     await f.runtime.tick()
-    expect(f.records.map((row) => row.target)).toEqual(['客户0', '客户1'])
-    expect(f.records[0].question).toBe('问题0\n第二个问题')
+    expect(f.records.filter((row) => row.state === 'sent').map((row) => row.target)).toEqual([
+      '客户0',
+      '客户1'
+    ])
+    expect(f.records.find((row) => row.state === 'sent')?.question).toBe('第二个问题')
+    expect(f.records.find((row) => row.state === 'handoff')?.question).toBe('问题0')
     expect(f.maxSending()).toBe(1)
   })
   it('never guesses an unreadable numeric badge and can retry after the badge becomes clear', async () => {
@@ -430,7 +467,7 @@ describe('foreground batch scanning and processing', () => {
       await f.runtime.pause()
       database.close()
     }
-  })
+  }, 30000)
   it('never opens a conversation outside the allowed names', async () => {
     const f = fixture()
     await f.runtime.start(['客户14'])

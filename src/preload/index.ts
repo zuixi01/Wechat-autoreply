@@ -148,7 +148,13 @@ if (process.contextIsolated) {
       resolve: (input: unknown) => ipcRenderer.invoke('foreground-wechat:resolve', input),
       batchStatus: () => ipcRenderer.invoke('foreground-wechat:batch-status'),
       batchStart: (input: unknown) => ipcRenderer.invoke('foreground-wechat:batch-start', input),
-      batchPause: () => ipcRenderer.invoke('foreground-wechat:batch-pause')
+      batchPause: () => ipcRenderer.invoke('foreground-wechat:batch-pause'),
+      resources: (target: string) => ipcRenderer.invoke('foreground-wechat:resources', target),
+      importSticker: () => ipcRenderer.invoke('foreground-wechat:import-sticker'),
+      editSticker: (input: unknown) => ipcRenderer.invoke('foreground-wechat:edit-sticker', input),
+      editStyle: (input: unknown) => ipcRenderer.invoke('foreground-wechat:edit-style', input),
+      enableLearning: (enabled: boolean) =>
+        ipcRenderer.invoke('foreground-wechat:enable-learning', enabled)
     })
     contextBridge.exposeInMainWorld('osInfo', { platform: process.platform })
   } catch (error) {

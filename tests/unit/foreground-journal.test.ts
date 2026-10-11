@@ -6,6 +6,30 @@ import { randomUUID } from 'node:crypto'
 import { SqliteForegroundJournal } from '../../src/core/persistence/foreground-journal'
 
 describe('foreground durable execution journal', () => {
+  it('remembers generated wording beyond 500 rows and across restarts', () => {
+    const root = mkdtempSync(join(tmpdir(), 'generated-history-')),
+      path = join(root, 'journal.sqlite')
+    let journal = new SqliteForegroundJournal(path)
+    try {
+      for (let n = 0; n < 505; n++)
+        journal.save({
+          id: randomUUID(),
+          target: 'a',
+          question: 'q',
+          reply: `生成内容${n}`,
+          state: 'not_sent',
+          createdAt: n
+        })
+      journal.close()
+      journal = new SqliteForegroundJournal(path)
+      expect(journal.isGenerated('生成内容0🙂')).toBe(true)
+      expect(journal.isGenerated('生成内容504')).toBe(true)
+      expect(journal.isGenerated('本人独有内容')).toBe(false)
+    } finally {
+      journal.close()
+      rmSync(root, { recursive: true })
+    }
+  })
   it('keeps generated wording scoped to its contact, including unsent drafts', () => {
     const journal = new SqliteForegroundJournal(':memory:')
     try {

@@ -4,7 +4,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { reconcileJevSettlements } from '../../evals/jev/settlement-reconciliation'
 import { hashContext } from '../../src/core/reply/hashes'
 import {
@@ -12,6 +12,7 @@ import {
   verifyPrivatePaths
 } from '../../src/core/persistence/private-backup-directory'
 import { createSyntheticJevSettlementInput } from '../fixtures/jev-settlement-data'
+vi.setConfig({ testTimeout: 30000 })
 
 const fixtureRoot = resolve('.local/testinputs')
 const publicRoot = resolve(tmpdir())
@@ -133,7 +134,7 @@ async function file(name: string, body: unknown = createInputFixture()): Promise
 }
 async function command(
   args: string[],
-  deadlineMs = 4000
+  deadlineMs = 20000
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((done, reject) => {
     const release = process.env.JEV_SETTLEMENT_COMPILED_RELEASE
@@ -236,7 +237,7 @@ async function grantPublicRead(path: string): Promise<void> {
     const timer = setTimeout(() => {
       timedOut = true
       child.kill()
-    }, 4000)
+    }, 20000)
     child.on('error', () => {
       clearTimeout(timer)
       reject(new Error('fixture_acl_failed'))

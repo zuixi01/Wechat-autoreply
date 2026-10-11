@@ -33,6 +33,7 @@ export interface ForegroundWindows {
   focus(binding: ForegroundWindow, signal: AbortSignal): Promise<void>
   typeText(binding: ForegroundWindow, text: string, signal: AbortSignal): Promise<void | string>
   readEditorText?(binding: ForegroundWindow, signal: AbortSignal): Promise<string>
+  pasteImage?(binding: ForegroundWindow, dib: Buffer, signal: AbortSignal): Promise<void>
 }
 const liveBridges = new Set<ForegroundWindowBridge>()
 let quitHookInstalled = false
@@ -87,8 +88,13 @@ export class ForegroundWindowBridge implements ForegroundWindows {
     if (typeof response.editorText !== 'string') throw new Error('editor_text_unavailable')
     return response.editorText
   }
+  async pasteImage(binding: ForegroundWindow, dib: Buffer, signal: AbortSignal): Promise<void> {
+    if (dib.length > 1048616 || dib.length < 44 || dib.readUInt32LE(0) !== 40)
+      throw new Error('image_invalid')
+    await this.request('paste_image', signal, binding, dib.toString('base64'))
+  }
   private request(
-    command: 'inspect' | 'focus' | 'type' | 'read_editor',
+    command: 'inspect' | 'focus' | 'type' | 'read_editor' | 'paste_image',
     signal: AbortSignal,
     binding?: ForegroundWindow,
     text?: string
@@ -100,7 +106,7 @@ export class ForegroundWindowBridge implements ForegroundWindows {
     return work
   }
   private async exchange(
-    command: 'inspect' | 'focus' | 'type' | 'read_editor',
+    command: 'inspect' | 'focus' | 'type' | 'read_editor' | 'paste_image',
     signal: AbortSignal,
     binding?: ForegroundWindow,
     text?: string
@@ -173,7 +179,8 @@ export class ForegroundWindowBridge implements ForegroundWindows {
       const abort = (): void => {
         // An active paste must finish restoring the clipboard. The helper cannot
         // press Enter; the runtime will discard its result after cancellation.
-        if (['type', 'read_editor'].includes(command) && requestWritten) cancelledAfterWrite = true
+        if (['type', 'read_editor', 'paste_image'].includes(command) && requestWritten)
+          cancelledAfterWrite = true
         else finish(new Error('cancelled'))
       }
       const unavailable = (): void => finish(new Error('desktop_input_unavailable'))
@@ -193,6 +200,7 @@ export class ForegroundWindowBridge implements ForegroundWindows {
               'foreground_lost',
               'screen_obscured',
               'text_invalid',
+              'image_invalid',
               'input_failed',
               'input_state_changed',
               'clipboard_unavailable',

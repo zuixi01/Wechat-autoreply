@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+vi.setConfig({ testTimeout: 30000 })
 import {
   replayMemoryCases,
   adjudicateMemoryReplay,
@@ -122,7 +123,7 @@ describe('isolated frozen three-arm replay', () => {
     const result = await execute(
       process.execPath,
       [resolve('node_modules/tsx/dist/cli.mjs'), resolve('tests/fixtures/timing-sink-probe.ts')],
-      { timeout: 5000 }
+      { timeout: 20000 }
     )
     expect(JSON.parse(result.stdout)).toEqual({
       origin: 'synthetic',

@@ -52,13 +52,13 @@ function fixture(polling = false) {
   }
 }
 describe('project-owned foreground WeChat runtime', () => {
-  it('uses a verified dot to process the entire last incoming turn and ignores earlier turns', async () => {
+  it('uses a verified dot for the latest preview and hands off older ambiguous incoming text', async () => {
     const f = fixture()
     f.set(observation([msg('旧问题'), msg('旧回复', 'outbound'), msg('新问题'), msg('补充新问题')]))
     await f.runtime.start('Q', 'current_chat', { count: null, preview: '补充新问题' })
     await f.runtime.tick()
-    expect(f.records).toHaveLength(1)
-    expect(f.records[0].question).toBe('新问题\n补充新问题')
+    expect(f.records.filter(row => row.state === 'sent').map(row => row.question)).toEqual(['补充新问题'])
+    expect(f.records.find(row => row.state === 'handoff')?.question).toBe('新问题')
   })
   it('refuses an unknown-count tail with an unverified preview or truncated maximum history', async () => {
     const f = fixture()
@@ -397,7 +397,7 @@ describe('project-owned foreground WeChat runtime', () => {
         'current_chat',
         true
       )
-      expect(f.runtime.status().state).toBe('paused')
+      expect(f.runtime.status().state).toBe(kind === 'input' ? 'waiting_owner' : 'paused')
       expect(f.driver.generate).not.toHaveBeenCalled()
       expect(f.driver.dispatch).not.toHaveBeenCalled()
     }
@@ -490,7 +490,9 @@ describe('project-owned foreground WeChat runtime', () => {
         await f.runtime.tick()
         await f.runtime.tick()
       }
-      expect(f.runtime.status().state).toBe('paused')
+      expect(f.runtime.status().state).toBe(
+        ['input', 'outbound'].includes(kind) ? 'waiting_owner' : 'paused'
+      )
       expect(f.driver.dispatch).not.toHaveBeenCalled()
     }
   )
@@ -544,7 +546,9 @@ describe('project-owned foreground WeChat runtime', () => {
         await f.runtime.tick()
       }
       expect(f.driver.dispatch).not.toHaveBeenCalled()
-      expect(f.runtime.status().state).toBe('paused')
+      expect(f.runtime.status().state).toBe(
+        ['input', 'outbound'].includes(kind) ? 'waiting_owner' : 'paused'
+      )
     }
   )
   it('invalidates a generated draft when another new message arrives', async () => {

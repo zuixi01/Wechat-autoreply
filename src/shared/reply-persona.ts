@@ -57,17 +57,19 @@ export function formatWechatReply(text: string): string {
   return formatted
 }
 
+export const ownerStyleKey = (value: string): string =>
+  value
+    .normalize('NFKC')
+    .replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}\uFE0F\u200D]/gu, '')
+    .replace(/\s*([:;,!?。])\s*/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
+
 export function ownerStyleExamples(
   messages: readonly { direction: string; text: string }[],
   generatedReplies: readonly string[]
 ): string[] {
-  const canonical = (value: string): string =>
-    value
-      .normalize('NFKC')
-      .replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}\uFE0F\u200D]/gu, '')
-      .replace(/\s*([:;,!?。])\s*/g, '$1')
-      .replace(/\s+/g, ' ')
-      .trim()
+  const canonical = ownerStyleKey
   const generated = new Set(generatedReplies.map(canonical)),
     seen = new Set<string>()
   return messages

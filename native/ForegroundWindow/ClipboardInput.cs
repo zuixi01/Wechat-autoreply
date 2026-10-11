@@ -150,6 +150,26 @@ internal sealed class ClipboardInput : IDisposable {
   key(0x56,true);Wait(80);guard();
   return CopyEditor(expectedPid,key,guard);
  }
+ internal void PasteImage(byte[] dib,Action<int,bool> key,Action guard) {
+  if(dib.Length<44 || BitConverter.ToUInt32(dib,0)!=40 || BitConverter.ToUInt16(dib,12)!=1 || BitConverter.ToUInt16(dib,14)!=32 || BitConverter.ToUInt32(dib,16)!=0) throw new Exception("image_invalid");
+  var width=BitConverter.ToInt32(dib,4);var height=BitConverter.ToInt32(dib,8);
+  if(width<1 || width>512 || height>=0 || height < -512 || dib.Length!=40+width*(-height)*4) throw new Exception("image_invalid");
+  guard();var handle=Allocate(dib);
+  try {
+   Open();try {
+    if(GetClipboardSequenceNumber()!=sequence) throw new Exception("clipboard_state_changed");
+    if(!EmptyClipboard()) throw new Exception("clipboard_unavailable");
+    changed=true;sequence=GetClipboardSequenceNumber();
+    if(SetClipboardData(8,handle)==0) throw new Exception("clipboard_unavailable");
+    handle=0;sequence=GetClipboardSequenceNumber();
+   } finally {CloseClipboard();}
+  } finally {if(handle!=0) GlobalFree(handle);}
+  guard();key(0x56,true);Wait(120);guard();
+  // Closing a DIB clipboard can synthesize CF_BITMAP and advance the sequence.
+  // Only acknowledge it while this hidden window still owns the clipboard;
+  // a newer clipboard copied by the user must never be restored over.
+  Open();try {if(GetClipboardOwner()==owner) sequence=GetClipboardSequenceNumber();} finally {CloseClipboard();}
+ }
  public void Dispose() {
   try {
    if(changed) {

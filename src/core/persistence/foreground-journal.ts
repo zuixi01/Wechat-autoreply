@@ -12,6 +12,8 @@ import type { ForegroundJournal } from '../agent/foreground-wechat'
 import type { ForegroundBatchStore } from '../agent/foreground-batch'
 import { ListRowSchema, type ListRow } from '../../shared/contracts/foreground-batch'
 import { z } from 'zod'
+import { createHash } from 'node:crypto'
+import { ownerStyleKey } from '../../shared/reply-persona'
 const BatchCheckpointSchema = z.strictObject({
   row: ListRowSchema,
   checkpoint: ForegroundCheckpointSchema.optional()
@@ -31,6 +33,21 @@ export class SqliteForegroundJournal implements ForegroundJournal, ForegroundBat
     this.db.exec(
       'CREATE TABLE IF NOT EXISTS foreground_single_checkpoints (target TEXT PRIMARY KEY, payload TEXT NOT NULL); CREATE TABLE IF NOT EXISTS foreground_resolutions (id TEXT PRIMARY KEY, state TEXT NOT NULL, resolved_at INTEGER NOT NULL)'
     )
+    this.db.exec(
+      'CREATE TABLE IF NOT EXISTS foreground_generated_hashes (hash TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS foreground_migrations (name TEXT PRIMARY KEY)'
+    )
+    if (
+      !this.db
+        .prepare('SELECT 1 FROM foreground_migrations WHERE name=?')
+        .get('generated_hashes_v1')
+    )
+      this.transaction(() => {
+        for (const row of this.db
+          .prepare("SELECT json_extract(payload,'$.reply') AS reply FROM foreground_replies")
+          .all())
+          this.markGenerated(String(row.reply ?? ''))
+        this.db.prepare('INSERT INTO foreground_migrations VALUES (?)').run('generated_hashes_v1')
+      })
   }
   list(limit?: number): ForegroundRecord[] {
     if (limit !== undefined) {
@@ -73,6 +90,22 @@ export class SqliteForegroundJournal implements ForegroundJournal, ForegroundBat
       )
       .all(target)
       .map((row) => ForegroundRecordSchema.parse(JSON.parse(String(row.payload))).reply)
+  }
+  private generatedHash(text: string): string {
+    return createHash('sha256').update(ownerStyleKey(text)).digest('hex')
+  }
+  private markGenerated(text: string): void {
+    if (text.trim())
+      this.db
+        .prepare('INSERT OR IGNORE INTO foreground_generated_hashes VALUES (?)')
+        .run(this.generatedHash(text))
+  }
+  isGenerated(text: string): boolean {
+    return Boolean(
+      this.db
+        .prepare('SELECT 1 FROM foreground_generated_hashes WHERE hash=?')
+        .get(this.generatedHash(text))
+    )
   }
   loadSingle(target: string): ForegroundCheckpoint | undefined {
     const row = this.db
@@ -132,13 +165,28 @@ export class SqliteForegroundJournal implements ForegroundJournal, ForegroundBat
         .run(valid.id, valid.state, Date.now())
       // Settle this attempt only. Later messages remain beyond its exact source
       // boundary and are still new after restart; never replay this attempt.
-      if (record.source)
+      if (record.source) {
+        const old = this.loadSingle(record.target)
+        const delivery =
+          valid.state === 'sent' &&
+          old?.delivery &&
+          old.delivery.id === record.planId &&
+          old.delivery.cursor === record.partIndex &&
+          old.delivery.cursor + 1 < old.delivery.parts.length
+            ? { ...old.delivery, cursor: old.delivery.cursor + 1 }
+            : undefined
         this.writeSingle({
           baseline: record.source,
-          ownEcho: valid.state === 'sent' ? record.reply : undefined,
-          pending: false
+          ownEcho:
+            valid.state === 'sent'
+              ? record.part?.kind === 'image'
+                ? '[非文本消息]'
+                : record.reply
+              : undefined,
+          pending: Boolean(delivery),
+          delivery
         })
-      else {
+      } else {
         // Old records lack a source boundary. Preserve the existing legacy
         // manual-rebaseline behavior rather than inventing a message identity.
         this.clearSingle(record.target)
@@ -195,6 +243,7 @@ export class SqliteForegroundJournal implements ForegroundJournal, ForegroundBat
   }
   save(record: ForegroundRecord): void {
     const valid = ForegroundRecordSchema.parse(record)
+    this.markGenerated(valid.reply)
     this.db
       .prepare(
         'INSERT INTO foreground_replies VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload'

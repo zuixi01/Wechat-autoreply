@@ -66,11 +66,11 @@ internal static class Program {
   string? line;while((line=Console.ReadLine())!=null) {
    string? id=null;
    try {
-    if(line.Length>65536) throw new Exception("request_invalid");
+    if(line.Length>1500000) throw new Exception("request_invalid");
     using var document=JsonDocument.Parse(line);var root=document.RootElement;id=root.GetProperty("id").GetString();if(!Guid.TryParse(id,out _)) throw new Exception("request_invalid");
     var command=root.GetProperty("command").GetString();var windows=Windows();
     string? editorText=null;
-    if(command is "focus" or "type" or "read_editor") {
+    if(command is "focus" or "type" or "read_editor" or "paste_image") {
      var expected=JsonSerializer.Deserialize<Binding>(root.GetProperty("binding").GetRawText(),Json);
      var selected=windows.SingleOrDefault(w=>w==expected);if(selected==null) throw new Exception("window_changed");
      var handle=(nint)long.Parse(selected.Id);
@@ -86,6 +86,11 @@ internal static class Program {
        if(SurfaceProbe.IsBlocked(handle,selected.Bounds)) throw new Exception("screen_obscured");
       }
       using var transfer=new ClipboardInput();
+      if(command=="paste_image") {
+       var encoded=root.GetProperty("text").GetString();
+       if(encoded==null || encoded.Length>1400000) throw new Exception("image_invalid");
+       transfer.PasteImage(Convert.FromBase64String(encoded),(key,control)=>Shortcut(key,control,Guard),Guard);
+      } else
       editorText=command=="type"
        ?transfer.Paste(text!,selected.Pid,(key,control)=>Shortcut(key,control,Guard),Guard)
        :transfer.CopyEditor(selected.Pid,(key,control)=>Shortcut(key,control,Guard),Guard);
@@ -94,7 +99,7 @@ internal static class Program {
     var current=Windows();var foreground=Foreground();var active=current.SingleOrDefault(value=>value.Id==foreground);
     var occluded=active!=null && SurfaceProbe.IsBlocked((nint)long.Parse(active.Id),active.Bounds);
     Console.WriteLine(JsonSerializer.Serialize(new {id,ok=true,windows=current,foreground,editorText,occluded},Json));
-   } catch(Exception e) {var code=e.Message is "request_invalid" or "window_changed" or "foreground_lost" or "text_invalid" or "input_failed" or "input_state_changed" or "clipboard_unavailable" or "clipboard_state_changed" or "editor_text_unavailable" or "screen_obscured"?e.Message:"window_query_failed";Console.WriteLine(JsonSerializer.Serialize(new{id,ok=false,error=code},Json));}
+   } catch(Exception e) {var code=e.Message is "request_invalid" or "window_changed" or "foreground_lost" or "text_invalid" or "image_invalid" or "input_failed" or "input_state_changed" or "clipboard_unavailable" or "clipboard_state_changed" or "editor_text_unavailable" or "screen_obscured"?e.Message:"window_query_failed";Console.WriteLine(JsonSerializer.Serialize(new{id,ok=false,error=code},Json));}
    Console.Out.Flush();
   }
  }

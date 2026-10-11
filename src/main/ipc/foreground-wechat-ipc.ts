@@ -1,4 +1,7 @@
-import { BrowserWindow, ipcMain } from 'electron'
+import { BrowserWindow, ipcMain, dialog } from 'electron'
+import { readFile, stat } from 'node:fs/promises'
+import { basename } from 'node:path'
+import { z } from 'zod'
 import { join } from 'node:path'
 import { rendererTrust } from './trusted-ipc'
 import {
@@ -9,7 +12,10 @@ import { ForegroundWechatRuntime } from '../../core/agent/foreground-wechat'
 import { ForegroundBatchRuntime } from '../../core/agent/foreground-batch'
 import { ForegroundBatchNavigator } from '../services/foreground-batch-navigator'
 import { BatchStartSchema } from '../../shared/contracts/foreground-batch'
-import { ownerStyleExamples } from '../../shared/reply-persona'
+import { PersonalStyle } from '../../core/memory/personal-style'
+import { PersonalStickerStore } from '../services/personal-sticker-store'
+import { StyleEditSchema } from '../../shared/contracts/personal-resources'
+import { hashContext } from '../../core/reply/hashes'
 import { SqliteForegroundJournal } from '../../core/persistence/foreground-journal'
 import {
   ForegroundWechatDriver,
@@ -28,9 +34,30 @@ export function registerForegroundWechatIpc(
   close: () => Promise<void>
 } {
   const journal = new SqliteForegroundJournal(join(userData, 'agent', 'foreground-wechat.sqlite'))
+  const style = new PersonalStyle(
+    join(userData, 'agent', 'personal-style.sqlite'),
+    userData,
+    (text) => journal.isGenerated(text)
+  )
+  const stickers = new PersonalStickerStore(join(userData, 'agent', 'stickers'))
+  let closed = false
   const configured = (target: string): ForegroundConfiguration => ({
     ...configuration(target),
-    ownerStyle: (messages) => ownerStyleExamples(messages, journal.generatedReplies(target))
+    ownerStyle: () => style.examples(target),
+    stickers: () => stickers.available(target),
+    stickerStore: stickers,
+    manual: (observation, messages) => {
+      setImmediate(() => {
+        if (closed) return
+        try {
+          messages.forEach((message, index) =>
+            style.observe(target, hashContext([observation, index]), message.text)
+          )
+        } catch {
+          console.warn('[PersonalStyle] observation_not_saved')
+        }
+      })
+    }
   })
   const runtime = new ForegroundWechatRuntime(
     new ForegroundWechatDriver(() => configured(runtime.status().target)),
@@ -55,6 +82,11 @@ export function registerForegroundWechatIpc(
         accept: (observation) => driver.accept(observation),
         read: (signal, fresh) => driver.read(signal, fresh),
         generate: (observation, signal, incoming) => driver.generate(observation, signal, incoming),
+        generatePlan: (observation, signal, incoming) =>
+          driver.generatePlan(observation, signal, incoming),
+        dispatchImage: (observation, part, signal) =>
+          driver.dispatchImage(observation, part, signal),
+        manual: (observation, messages) => driver.manual(observation, messages),
         dispatch: (observation, text, signal) => driver.dispatch(observation, text, signal),
         verifyReceipt: (observation, text, signal) =>
           driver.verifyReceipt(observation, text, signal)
@@ -65,6 +97,64 @@ export function registerForegroundWechatIpc(
     journal
   )
   const trusted = rendererTrust(rendererFile, developerOrigin)
+  ipcMain.handle('foreground-wechat:resources', (event, raw: unknown) => {
+    trusted(event)
+    const target = z.string().trim().max(128).parse(raw)
+    return {
+      stickers: stickers.list(),
+      style: style.list(target),
+      learningEnabled: style.enabled()
+    }
+  })
+  ipcMain.handle('foreground-wechat:import-sticker', async (event) => {
+    trusted(event)
+    const result = await dialog.showOpenDialog({
+      title: '导入本地静态表情图片',
+      properties: ['openFile'],
+      filters: [{ name: 'PNG / JPEG', extensions: ['png', 'jpg', 'jpeg'] }]
+    })
+    if (result.canceled || result.filePaths.length !== 1) return null
+    const path = result.filePaths[0]
+    if ((await stat(path)).size > 4 * 1024 * 1024) throw new Error('image_invalid')
+    return stickers.import(
+      await readFile(path),
+      basename(path)
+        .replace(/\.[^.]+$/, '')
+        .slice(0, 40) || '表情',
+      []
+    )
+  })
+  ipcMain.handle('foreground-wechat:edit-sticker', (event, raw: unknown) => {
+    trusted(event)
+    const input = z
+      .strictObject({
+        id: z.string().uuid(),
+        enabled: z.boolean().optional(),
+        label: z.string().trim().min(1).max(40).optional(),
+        tags: z.array(z.string().trim().min(1).max(20)).max(8).optional(),
+        delete: z.boolean().optional()
+      })
+      .parse(raw)
+    if (input.delete) stickers.delete(input.id)
+    else {
+      const { id, delete: _delete, ...patch } = input
+      stickers.update(id, patch)
+    }
+  })
+  ipcMain.handle('foreground-wechat:edit-style', (event, raw: unknown) => {
+    trusted(event)
+    const input = StyleEditSchema.parse(raw)
+    if (input.action === 'teach' && input.text) style.teach(input.target, input.text)
+    else if (input.action === 'correct' && input.id && input.text)
+      style.correct(input.target, input.id, input.text)
+    else if (input.action === 'delete' && input.id) style.delete(input.target, input.id)
+    else if (input.action === 'rollback' && input.id) style.rollback(input.target, input.id)
+    else throw new Error('style_edit_invalid')
+  })
+  ipcMain.handle('foreground-wechat:enable-learning', (event, raw: unknown) => {
+    trusted(event)
+    style.setEnabled(z.boolean().parse(raw))
+  })
   let starting = false,
     operation = 0
   ipcMain.handle('foreground-wechat:status', (event) => {
@@ -151,6 +241,8 @@ export function registerForegroundWechatIpc(
     pause,
     close: async () => {
       await pause()
+      closed = true
+      style.close()
       journal.close()
     }
   }

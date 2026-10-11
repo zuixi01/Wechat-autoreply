@@ -10,8 +10,25 @@ import {
   type ForegroundCheckpoint
 } from '../../shared/contracts/foreground-wechat'
 import { hashContext } from '../reply/hashes'
+import {
+  ReplyPlanSchema,
+  type ReplyPlan,
+  type Delivery,
+  type ReplyPart
+} from '../../shared/contracts/foreground-reply-plan'
 
 export interface ForegroundDriver {
+  manual?(observation: ForegroundObservation, messages: ForegroundObservation['messages']): void
+  generatePlan?(
+    observation: ForegroundObservation,
+    signal: AbortSignal,
+    incoming?: ForegroundObservation['messages']
+  ): Promise<ReplyPlan | null>
+  dispatchImage?(
+    observation: ForegroundObservation,
+    part: Extract<ReplyPart, { kind: 'image' }>,
+    signal: AbortSignal
+  ): Promise<'sent' | 'not_sent' | 'unknown'>
   dispatchFailure?(): ForegroundDispatchFailure | undefined
   metrics?(): ForegroundStatus['performance']
   accept?(observation: ForegroundObservation): void
@@ -56,6 +73,7 @@ const active = new Set([
   'connecting',
   'running',
   'waiting_foreground',
+  'waiting_owner',
   'recovering',
   'generating',
   'sending'
@@ -80,6 +98,14 @@ export class ForegroundWechatRuntime {
   private ownEcho?: string
   private ownEchoFingerprint?: string
   private pendingWork = false
+  private delivery?: Delivery
+  private generation?: {
+    observation: ForegroundObservation
+    settled: boolean
+    result?: string | ReplyPlan | null
+    error?: unknown
+    work: Promise<void>
+  }
   private controller?: AbortController
   private work?: Promise<void>
   private timer?: ReturnType<typeof setTimeout>
@@ -101,7 +127,9 @@ export class ForegroundWechatRuntime {
     private readonly driver: ForegroundDriver,
     private readonly journal: ForegroundJournal,
     private readonly polling = true,
-    private readonly checkpoint?: (value: ForegroundCheckpoint) => void
+    private readonly checkpoint?: (value: ForegroundCheckpoint) => void,
+    private readonly backgroundGeneration = false,
+    private readonly generationGate?: import('./foreground-generation-gate').ForegroundGenerationGate
   ) {}
   activity(): Omit<ForegroundStatus, 'records'> {
     return {
@@ -145,6 +173,8 @@ export class ForegroundWechatRuntime {
     this.ownEcho = restored?.ownEcho
     this.ownEchoFingerprint = restored?.ownEchoFingerprint
     this.pendingWork = restored?.pending ?? false
+    this.delivery = restored?.delivery
+    this.generation = undefined
     this.baseline = restored?.baseline
     this.pendingReceipt = undefined
     this.connection = { mode, pending, restored, retried: false }
@@ -194,6 +224,7 @@ export class ForegroundWechatRuntime {
       if (pending) {
         const { count, preview } = pending
         let start = baseline.messages.length
+        let ambiguous: ForegroundObservation['messages'] = []
         if (count === null) {
           // A red dot identifies a new conversation, not the number of messages.
           // Include the complete consecutive incoming turn, anchored by the last
@@ -201,6 +232,11 @@ export class ForegroundWechatRuntime {
           while (start > 0 && baseline.messages[start - 1].direction === 'inbound') start--
           if (start === 0 && baseline.messages.length === 80)
             throw new Error('unread_message_unverified')
+          // With no saved boundary a dot cannot prove older text is unread.
+          // Reply only to the preview-anchored latest item and retain the rest
+          // as a visible handoff, rather than silently answering read history.
+          ambiguous = baseline.messages.slice(start, -1)
+          start = baseline.messages.length - 1
         } else start -= count
         const messages = baseline.messages.slice(Math.max(0, start))
         const prefix = preview.replace(/(?:\.\.\.|…)$/, '').trim()
@@ -215,6 +251,21 @@ export class ForegroundWechatRuntime {
           throw new Error('unread_message_unverified')
         this.baseline = { ...baseline, messages: baseline.messages.slice(0, start) }
         this.pendingWork = true
+        if (ambiguous.length) {
+          const record: ForegroundRecord = {
+            id: randomUUID(),
+            target: this.target,
+            question: ambiguous.map((message) => message.text).join('\n'),
+            reply: '',
+            state: 'handoff',
+            failureReason: 'unread_boundary_ambiguous',
+            source: this.baseline,
+            createdAt: Date.now()
+          }
+          if (this.journal.complete)
+            this.journal.complete(record, { baseline: this.baseline, pending: true })
+          else this.journal.save(record)
+        }
       } else this.baseline = baseline
     }
     this.connection = undefined
@@ -238,7 +289,8 @@ export class ForegroundWechatRuntime {
         baseline: this.baseline,
         ownEcho: this.ownEcho,
         ownEchoFingerprint: this.ownEchoFingerprint,
-        pending: this.pendingWork
+        pending: this.pendingWork,
+        delivery: this.delivery
       })
   }
   tick(): Promise<void> {
@@ -250,13 +302,16 @@ export class ForegroundWechatRuntime {
     })
   }
   private schedule(): void {
-    if (!this.polling || !['running', 'waiting_foreground', 'recovering'].includes(this.state))
+    if (
+      !this.polling ||
+      !['running', 'waiting_foreground', 'waiting_owner', 'recovering'].includes(this.state)
+    )
       return
     clearTimeout(this.timer)
     const delay =
       this.state === 'recovering'
         ? Math.min(30000, 1000 * 2 ** (this.recoveryAttempts - 1))
-        : this.state === 'waiting_foreground'
+        : ['waiting_foreground', 'waiting_owner'].includes(this.state)
           ? 1000
           : 750
     this.nextRetryAt = this.state === 'recovering' ? Date.now() + delay : undefined
@@ -278,7 +333,10 @@ export class ForegroundWechatRuntime {
   }
   private recover(error: unknown): void {
     const code = this.code(error)
-    if (code === 'foreground_lost' || code === 'screen_obscured') {
+    if (code === 'human_input' || code === 'human_reply') {
+      this.state = 'waiting_owner'
+      this.reason = code
+    } else if (code === 'foreground_lost' || code === 'screen_obscured') {
       this.state = 'waiting_foreground'
       this.reason = code
     } else if (transient.has(code) && (code !== 'message_gap' || this.recoveryAttempts < 2)) {
@@ -305,16 +363,60 @@ export class ForegroundWechatRuntime {
     }
     throw new Error('message_gap')
   }
+  private async draft(
+    next: ForegroundObservation,
+    incoming: ForegroundObservation['messages'],
+    signal: AbortSignal
+  ): Promise<string | ReplyPlan | null | undefined> {
+    const operation = (): Promise<string | ReplyPlan | null> =>
+      this.driver.generatePlan
+        ? this.driver.generatePlan(next, signal, incoming)
+        : this.driver.generate(next, signal, incoming)
+    const generate = (): Promise<string | ReplyPlan | null> =>
+      this.generationGate ? this.generationGate.run(signal, operation) : operation()
+    if (!this.backgroundGeneration) return generate()
+    if (
+      !this.generation ||
+      this.generation.observation.revision !== next.revision ||
+      !sameForegroundMessages(this.generation.observation.messages, next.messages)
+    ) {
+      const job: NonNullable<ForegroundWechatRuntime['generation']> = {
+        observation: next,
+        settled: false,
+        work: Promise.resolve()
+      }
+      job.work = generate().then(
+        (result) => {
+          job.result = result
+          job.settled = true
+        },
+        (error) => {
+          job.error = error
+          job.settled = true
+        }
+      )
+      this.generation = job
+    }
+    const job = this.generation
+    await Promise.race([job.work, new Promise<void>((resolve) => setTimeout(resolve, 0))])
+    if (!job.settled) return undefined
+    this.generation = undefined
+    if (job.error) throw job.error
+    return job.result ?? null
+  }
   private async cycle(): Promise<void> {
     const controller = this.controller,
       baseline = this.baseline
     if (
-      !['running', 'waiting_foreground', 'recovering'].includes(this.state) ||
+      !['running', 'waiting_foreground', 'waiting_owner', 'recovering', 'generating'].includes(
+        this.state
+      ) ||
       !controller ||
       controller.signal.aborted
     )
       return
     const signal = controller.signal
+    if (this.generation && !this.generation.settled) return
     const started = Date.now()
     try {
       if (this.connection) {
@@ -359,17 +461,34 @@ export class ForegroundWechatRuntime {
       this.nextRetryAt = undefined
       let consumedOwnEcho = false
       if (
-        additions[0]?.direction === 'outbound' &&
+        (additions[0]?.direction === 'outbound' ||
+          (additions[0]?.direction === 'system' && this.ownEcho === '[非文本消息]')) &&
         this.ownEcho &&
         sameForegroundMessages(
           [additions[0]],
-          [{ direction: 'outbound', text: this.ownEcho, pixelFingerprint: this.ownEchoFingerprint }]
+          [
+            {
+              direction: additions[0].direction,
+              text: this.ownEcho,
+              pixelFingerprint: this.ownEchoFingerprint
+            }
+          ]
         )
       ) {
         additions = additions.slice(1)
         consumedOwnEcho = true
       }
       if (additions.some((m) => m.direction === 'outbound')) {
+        this.delivery = undefined
+        this.generation = undefined
+        try {
+          this.driver.manual?.(
+            next,
+            additions.filter((message) => message.direction === 'outbound')
+          )
+        } catch {
+          /* Learning cannot block delivery. */
+        }
         const lastHuman = additions.findLastIndex((message) => message.direction === 'outbound')
         this.baseline = {
           ...next,
@@ -386,11 +505,18 @@ export class ForegroundWechatRuntime {
       this.driver.accept?.(next)
       const media = additions.filter(
         (message) =>
-          message.direction === 'system' && /non-text|图片|语音|视频|表情/.test(message.text)
+          message.direction === 'system' && /non-text|非文本|图片|语音|视频|表情/.test(message.text)
       )
-      if (media.length)
+      if (media.length) {
+        const lastMedia = next.messages.findLastIndex((message) => media.includes(message))
+        const key = hashContext({
+          target: this.target,
+          window: next.windowToken,
+          prior: baseline.messages,
+          throughMedia: next.messages.slice(0, lastMedia + 1)
+        })
         this.journal.save({
-          id: randomUUID(),
+          id: `${key.slice(0, 8)}-${key.slice(8, 12)}-4${key.slice(13, 16)}-a${key.slice(17, 20)}-${key.slice(20, 32)}`,
           target: this.target,
           question: media.map((message) => message.text).join('\n'),
           reply: '',
@@ -399,8 +525,9 @@ export class ForegroundWechatRuntime {
           failureReason: 'media_requires_owner',
           createdAt: Date.now()
         })
+      }
       additions = additions.filter((message) => message.direction === 'inbound')
-      if (!additions.some((m) => m.direction === 'inbound' && m.text.trim())) {
+      if (!additions.some((m) => m.direction === 'inbound' && m.text.trim()) && !this.delivery) {
         this.baseline = next
         if (consumedOwnEcho) {
           this.ownEcho = undefined
@@ -414,10 +541,25 @@ export class ForegroundWechatRuntime {
       this.state = 'generating'
       this.pendingWork = true
       this.changed()
-      const reply = await this.driver.generate(next, signal, additions)
+      if (additions.some((message) => message.direction === 'inbound')) this.delivery = undefined
+      let reply: string | null
+      if (!this.delivery) {
+        const generated = await this.draft(next, additions, signal)
+        if (generated === undefined) return
+        if (generated && typeof generated !== 'string')
+          this.delivery = {
+            ...ReplyPlanSchema.parse(generated),
+            id: randomUUID(),
+            question: additions.map((message) => message.text).join('\n'),
+            cursor: 0
+          }
+        reply = typeof generated === 'string' ? generated : generated ? '' : null
+      } else reply = ''
+      const part = this.delivery?.parts[this.delivery.cursor]
+      if (part) reply = part.kind === 'text' ? part.text : '[图片表情包]'
       if (signal.aborted) return
       if (!reply?.trim()) {
-        this.journal.save({
+        const handoff: ForegroundRecord = {
           id: randomUUID(),
           target: this.target,
           question: additions.map((message) => message.text).join('\n'),
@@ -426,7 +568,7 @@ export class ForegroundWechatRuntime {
           source: next,
           failureReason: 'owner_decision_required',
           createdAt: Date.now()
-        })
+        }
         this.baseline = next
         if (consumedOwnEcho) {
           this.ownEcho = undefined
@@ -434,6 +576,9 @@ export class ForegroundWechatRuntime {
         }
         this.pendingWork = false
         this.recoveryAttempts = 0
+        if (this.journal.complete)
+          this.journal.complete(handoff, { baseline: next, pending: false })
+        else this.journal.save(handoff)
         this.changed()
         this.state = 'running'
         return
@@ -452,17 +597,26 @@ export class ForegroundWechatRuntime {
       const record: ForegroundRecord = {
         id: randomUUID(),
         target: this.target,
-        question: additions.map((m) => m.text).join('\n'),
+        question: this.delivery?.question ?? additions.map((m) => m.text).join('\n'),
         reply: reply.trim(),
         state: 'unknown',
         source: current,
+        planId: this.delivery?.id,
+        partIndex: this.delivery?.cursor,
+        part,
         createdAt: Date.now()
       }
+      this.changed()
       this.journal.save(record)
       this.state = 'sending'
       let outcome: ForegroundRecord['state'] = 'unknown'
       try {
-        outcome = await this.driver.dispatch(current, record.reply, signal)
+        outcome =
+          part?.kind === 'image'
+            ? this.driver.dispatchImage
+              ? await this.driver.dispatchImage(current, part, signal)
+              : 'not_sent'
+            : await this.driver.dispatch(current, record.reply, signal)
       } catch {
         /* Unknown never authorizes replay. */
       }
@@ -527,7 +681,12 @@ export class ForegroundWechatRuntime {
     this.baseline = observation
     this.ownEcho = this.driver.receiptText?.() ?? reply
     this.ownEchoFingerprint = this.driver.receiptFingerprint?.()
-    this.pendingWork = false
+    if (this.delivery) {
+      if (this.delivery.cursor + 1 < this.delivery.parts.length)
+        this.delivery = { ...this.delivery, cursor: this.delivery.cursor + 1 }
+      else this.delivery = undefined
+    }
+    this.pendingWork = Boolean(this.delivery)
     this.recoveryAttempts = 0
     this.lastReplyDurationMs = Date.now() - started
     if (record) {
@@ -535,7 +694,8 @@ export class ForegroundWechatRuntime {
         baseline: this.baseline,
         ownEcho: this.ownEcho,
         ownEchoFingerprint: this.ownEchoFingerprint,
-        pending: this.pendingWork
+        pending: this.pendingWork,
+        delivery: this.delivery
       }
       if (this.journal.complete) this.journal.complete(record, checkpoint)
       else this.journal.save(record)

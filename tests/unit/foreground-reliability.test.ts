@@ -36,6 +36,84 @@ function fixture() {
   return { db, view, driver, runtime, generations: () => generations }
 }
 describe('durable foreground progress regressions', () => {
+  it('does not duplicate a media handoff when generation is retried', async () => {
+    const f = fixture()
+    let attempts = 0
+    f.driver.generate = async () => {
+      if (++attempts === 1) throw new Error('model_network_failed')
+      return 'reply'
+    }
+    try {
+      await f.runtime.start('test', 'current_chat')
+      f.view.messages.push({ direction: 'system', text: '[非文本消息]' }, msg('new text'))
+      await f.runtime.tick()
+      await f.runtime.tick()
+      expect(
+        f.db.list().filter((row) => row.failureReason === 'media_requires_owner')
+      ).toHaveLength(1)
+      expect(f.db.list().filter((row) => row.state === 'sent')).toHaveLength(1)
+    } finally {
+      await f.runtime.pause()
+      f.db.close()
+    }
+  })
+  it('commits skipped-question handoff and consumed boundary together', async () => {
+    const f = fixture()
+    f.driver.generate = async () => null
+    let atomic = 0
+    const complete = f.db.complete.bind(f.db)
+    f.db.complete = (record, checkpoint) => {
+      atomic++
+      complete(record, checkpoint)
+    }
+    try {
+      await f.runtime.start('test', 'current_chat')
+      f.view.messages.push(msg('owner question'))
+      await f.runtime.tick()
+      expect(atomic).toBe(1)
+      expect(f.db.loadSingle('test')?.baseline.messages.at(-1)?.text).toBe('owner question')
+    } finally {
+      await f.runtime.pause()
+      f.db.close()
+    }
+  })
+  it('does not turn an initial red dot into permission to auto-answer old read history', async () => {
+    const f = fixture()
+    try {
+      f.view.messages.push(msg('old read but unanswered'), msg('actually unread'))
+      await f.runtime.start('test', 'current_chat', { count: null, preview: 'actually unread' })
+      await f.runtime.tick()
+      expect(
+        f.db
+          .list()
+          .filter((record) => record.state === 'sent')
+          .map((record) => record.question)
+      ).toEqual(['actually unread'])
+      expect(f.db.list().find((record) => record.state === 'handoff')?.question).toBe(
+        'old read but unanswered'
+      )
+    } finally {
+      await f.runtime.pause()
+      f.db.close()
+    }
+  })
+  it('waits out a human draft and continues after it is cleared without reconnecting', async () => {
+    const f = fixture()
+    try {
+      await f.runtime.start('test', 'current_chat')
+      f.view.messages.push(msg('new while owner is typing'))
+      f.view.inputText = 'draft'
+      await f.runtime.tick()
+      expect(f.generations()).toBe(0)
+      f.view.inputText = ''
+      await f.runtime.tick()
+      expect(f.db.list().filter((record) => record.state === 'sent')).toHaveLength(1)
+      expect(f.runtime.status().state).toBe('running')
+    } finally {
+      await f.runtime.pause()
+      f.db.close()
+    }
+  })
   it('records an owner handoff when the model skips instead of silently losing the question', async () => {
     const f = fixture()
     f.driver.generate = async () => null

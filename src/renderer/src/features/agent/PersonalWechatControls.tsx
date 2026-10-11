@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import PersonalWechatBatchControls from './PersonalWechatBatchControls'
+import PersonalReplyResources from './PersonalReplyResources'
 import {
   ForegroundStatusSchema,
   type ForegroundStatus
@@ -10,12 +11,14 @@ const states: Record<ForegroundStatus['state'], string> = {
   connecting: '正在连接微信，请将微信切到前台',
   running: '等待新消息',
   waiting_foreground: '等待微信回到前台',
+  waiting_owner: '等待人工操作结束，随后自动继续',
   recovering: '短暂故障，正在自动恢复',
   generating: '正在生成回复',
   sending: '正在发送并核对回显',
   paused: '已暂停'
 }
 const reasons: Record<string, string> = {
+  unread_boundary_ambiguous: '首次接入只有红点，无法确认较早消息是否已读，已保留待本人查看',
   owner_decision_required: '这条需要本人决定，已保留待处理',
   media_requires_owner: '这条含图片、语音等内容，需要本人查看；文字消息会继续处理',
   none: '',
@@ -41,8 +44,8 @@ const reasons: Record<string, string> = {
   contact_not_unique:
     '搜索结果不完整或包含同名联系人，无法自动确定对象。请在微信中打开要测试的聊天，再点击“接入已打开的聊天”。',
   contact_mismatch: '当前聊天对象不是指定联系人，或无法确认单人聊天，已停止。',
-  human_input: '检测到输入框已有人工草稿，已暂停；请处理草稿后重新启动。',
-  human_reply: '检测到你已人工回复，已暂停。',
+  human_input: '输入框有人工草稿，正在等待；发送或清空草稿后会重新检查并继续。',
+  human_reply: '已接纳你刚才的人工回复，将继续等待后续新消息。',
   foreground_lost: '微信已失去前台。回到原聊天后会重新校验并继续；此期间不输入或发送。',
   screen_obscured: '微信聊天被通知或其他窗口遮挡，正在等待；移开遮挡后会自动核对并继续。',
   window_changed: '微信窗口或实例已变化，请重新启动。',
@@ -108,9 +111,15 @@ export default function PersonalWechatControls({ active }: { active: boolean }):
   }, [active])
   const running =
     status &&
-    ['connecting', 'running', 'waiting_foreground', 'recovering', 'generating', 'sending'].includes(
-      status.state
-    )
+    [
+      'connecting',
+      'running',
+      'waiting_foreground',
+      'waiting_owner',
+      'recovering',
+      'generating',
+      'sending'
+    ].includes(status.state)
   const operate = async (start: boolean, currentChat = false): Promise<void> => {
     setBusy(true)
     setError('')
@@ -288,6 +297,10 @@ export default function PersonalWechatControls({ active }: { active: boolean }):
           </div>
         )}
       </section>
+      <details style={{ marginTop: 16 }}>
+        <summary>自然回复、图片表情包与个人用词</summary>
+        <PersonalReplyResources target={target} />
+      </details>
       <details
         style={{ marginTop: 16 }}
         onToggle={(event) => setBatchExpanded(event.currentTarget.open)}

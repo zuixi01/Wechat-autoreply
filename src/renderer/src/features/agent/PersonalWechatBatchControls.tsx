@@ -11,6 +11,7 @@ const states: Record<BatchStatus['state'], string> = {
   paused: '已暂停'
 }
 const reasons: Record<string, string> = {
+  unread_boundary_ambiguous: '首次红点接入时较早消息的已读边界不明，待本人查看',
   owner_decision_required: '需要本人决定，已保留待处理',
   media_requires_owner: '需要本人查看的非文字消息',
   none: '',

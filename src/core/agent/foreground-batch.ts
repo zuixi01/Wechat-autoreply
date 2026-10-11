@@ -10,6 +10,7 @@ import {
 } from './foreground-list-scan'
 import type { BatchNavigator, BatchStatus, ListRow } from '../../shared/contracts/foreground-batch'
 import type { ForegroundCheckpoint } from '../../shared/contracts/foreground-wechat'
+import { ForegroundGenerationGate } from './foreground-generation-gate'
 
 export interface ForegroundBatchStore {
   loadBatch(
@@ -53,6 +54,8 @@ export class ForegroundBatchRuntime {
   private checkpoints = new Map<string, { row: ListRow; checkpoint?: ForegroundCheckpoint }>()
   private knownRows: ListRow[] = []
   private lastScanAt = 0
+  private queueTurns = 0
+  private readonly generationGate = new ForegroundGenerationGate(2)
   private controller?: AbortController
   private work?: Promise<void>
   private timer?: ReturnType<typeof setTimeout>
@@ -71,7 +74,12 @@ export class ForegroundBatchRuntime {
       current: this.current,
       discovered: this.discovered,
       pages: this.pages,
-      pending: this.queue.length,
+      pending: this.queue.filter(
+        (row) =>
+          row.unread !== 0 ||
+          this.sessions.get(row.name)?.hasPending() ||
+          this.pendingCheckpoint(row.name)
+      ).length,
       scanComplete: this.complete,
       nextRetryAt: this.nextRetryAt,
       issues: [...this.issues].map(([target, reason]) => ({ target, reason })),
@@ -102,6 +110,7 @@ export class ForegroundBatchRuntime {
     this.queue = []
     this.knownRows = []
     this.lastScanAt = 0
+    this.queueTurns = 0
     this.discovered = 0
     this.pages = 0
     this.complete = false
@@ -202,7 +211,16 @@ export class ForegroundBatchRuntime {
         await this.navigator.connect(signal, false)
         this.connected = true
       }
+      if (
+        this.queueTurns >= 8 &&
+        this.queue.every((row) => this.sessions.has(row.name)) &&
+        ![...this.sessions.values()].some(
+          (session) => session.activity().reason === 'send_verifying'
+        )
+      )
+        this.queue = []
       if (!this.queue.length) {
+        this.queueTurns = 0
         this.navigationReady = false
         this.state = 'scanning'
         this.current = ''
@@ -271,6 +289,19 @@ export class ForegroundBatchRuntime {
               ? this.checkpoints.get(row.name)!.row
               : row
           )
+          .sort(
+            (a, b) =>
+              Number(
+                a.unread === 0 &&
+                  !this.sessions.get(a.name)?.hasPending() &&
+                  !this.pendingCheckpoint(a.name)
+              ) -
+              Number(
+                b.unread === 0 &&
+                  !this.sessions.get(b.name)?.hasPending() &&
+                  !this.pendingCheckpoint(b.name)
+              )
+          )
         this.complete = true
         this.recoveryAttempts = 0
       }
@@ -282,6 +313,7 @@ export class ForegroundBatchRuntime {
         return
       }
       this.current = row.name
+      this.queueTurns++
       this.state = 'processing'
       if ((row.unread === null && !row.unreadDot) || (row.unread !== null && row.unread > 80)) {
         this.issues.set(row.name, 'unread_message_unverified')
@@ -317,7 +349,9 @@ export class ForegroundBatchRuntime {
           (checkpoint) => {
             this.checkpoints.set(row.name, { row, checkpoint })
             this.store?.saveBatch(row, checkpoint)
-          }
+          },
+          true,
+          this.generationGate
         )
         this.sessions.set(row.name, session)
         await session.start(
@@ -352,7 +386,8 @@ export class ForegroundBatchRuntime {
         this.reason = status.reason
         return
       }
-      if (status.state === 'paused') this.issues.set(row.name, status.reason)
+      if (status.state === 'paused' || status.state === 'waiting_owner')
+        this.issues.set(row.name, status.reason)
       if (status.state === 'recovering') {
         if (status.reason !== 'send_verifying' && this.queue.length > 1) {
           this.queue.push(this.queue.shift()!)
@@ -363,7 +398,7 @@ export class ForegroundBatchRuntime {
         this.recoveryAttempts = status.recoveryAttempts ?? 1
         return
       }
-      if (status.state === 'running' && session.hasPending()) {
+      if (['running', 'generating'].includes(status.state) && session.hasPending()) {
         if (this.queue.length > 1) this.queue.push(this.queue.shift()!)
         return
       }

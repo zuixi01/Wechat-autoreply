@@ -1,13 +1,16 @@
 import { spawn } from 'node:child_process'
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
-import { afterAll, beforeAll, expect, it } from 'vitest'
+import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import {
   protectPrivateDirectory,
   verifyPrivatePaths
 } from '../../src/core/persistence/private-backup-directory'
 
 const fixtureRoot = resolve('.local/testinputs')
+// Cold tsx startup alone exceeds 4s on the acceptance PC; retain a bounded
+// subprocess deadline without confusing toolchain startup with a CLI hang.
+vi.setConfig({ testTimeout: 30000 })
 let directory: string
 const policy = {
   version: 'synthetic-policy',
@@ -130,7 +133,7 @@ async function command(
     const timer = setTimeout(() => {
       timedOut = true
       child.kill()
-    }, 4000)
+    }, 20000)
     child.stdout.on('data', (chunk) => {
       stdout += chunk.toString()
     })

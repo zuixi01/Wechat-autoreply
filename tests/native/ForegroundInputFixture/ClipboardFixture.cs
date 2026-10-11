@@ -100,6 +100,20 @@ internal static class ClipboardFixture {
     check(blocked,"guard aborts before clipboard and input mutation");
    }
    check(Fingerprint(editor)==before,"clipboard unchanged after pre-input rejection");
+   var dib=new byte[40+4*4*4];
+   BitConverter.GetBytes(40u).CopyTo(dib,0);BitConverter.GetBytes(4).CopyTo(dib,4);BitConverter.GetBytes(-4).CopyTo(dib,8);
+   BitConverter.GetBytes((ushort)1).CopyTo(dib,12);BitConverter.GetBytes((ushort)32).CopyTo(dib,14);
+   var pasteKeys=0;
+   using(var transfer=new ClipboardInput()) {
+    transfer.PasteImage(dib,(key,control)=>{check(key==0x56 && control,"image transfer only pastes, never sends");pasteKeys++;check(IsClipboardFormatAvailable(8),"validated DIB available at paste time");},()=>{});
+   }
+   check(pasteKeys==1,"one image paste only");check(Fingerprint(editor)==before,"image transfer restores original clipboard");
+   using(var transfer=new ClipboardInput()) {
+    var rejected=false;
+    try {transfer.PasteImage(new byte[60],(_,_)=>throw new Exception("unexpected input"),()=>{});} catch(Exception error) when(error.Message=="image_invalid") {rejected=true;}
+    check(rejected,"invalid image rejected before paste");
+   }
+   check(Fingerprint(editor)==before,"invalid image leaves clipboard unchanged");
   } finally {stop.Set();if(!ui.Join(3000)) throw new Exception("fixture_ui_thread_failed");}
  }
 }

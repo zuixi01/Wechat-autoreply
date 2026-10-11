@@ -1,5 +1,7 @@
 import { z } from 'zod'
 import type { BatchStatus } from './foreground-batch'
+import { DeliverySchema, ReplyPartSchema } from './foreground-reply-plan'
+import type { PersonalResourcesApi } from './personal-resources'
 
 export const ForegroundMessageSchema = z.strictObject({
   direction: z.enum(['inbound', 'outbound', 'system']),
@@ -24,6 +26,9 @@ export const ForegroundRecordSchema = z.strictObject({
   reply: z.string().max(4096),
   state: z.enum(['unknown', 'sent', 'not_sent', 'handoff']),
   source: ForegroundObservationSchema.optional(),
+  planId: z.string().uuid().optional(),
+  partIndex: z.number().int().min(0).max(2).optional(),
+  part: ReplyPartSchema.optional(),
   failureReason: z.string().max(128).optional(),
   failureStage: z
     .enum(['before_input', 'input', 'draft_validation', 'before_enter', 'receipt'])
@@ -37,7 +42,8 @@ export const ForegroundCheckpointSchema = z.strictObject({
     .string()
     .regex(/^[a-f0-9]{64}$/)
     .optional(),
-  pending: z.boolean()
+  pending: z.boolean(),
+  delivery: DeliverySchema.optional()
 })
 export type ForegroundCheckpoint = z.infer<typeof ForegroundCheckpointSchema>
 export const ForegroundResolutionSchema = z.strictObject({
@@ -58,6 +64,7 @@ export const ForegroundStatusSchema = z.strictObject({
     'connecting',
     'running',
     'waiting_foreground',
+    'waiting_owner',
     'recovering',
     'generating',
     'sending',
@@ -114,7 +121,7 @@ export function sameForegroundMessages(
 export type ForegroundRecord = z.infer<typeof ForegroundRecordSchema>
 export type ForegroundDispatchFailure = Pick<ForegroundRecord, 'failureReason' | 'failureStage'>
 export type ForegroundStatus = z.infer<typeof ForegroundStatusSchema>
-export interface ForegroundDesktopApi {
+export interface ForegroundDesktopApi extends PersonalResourcesApi {
   status(): Promise<ForegroundStatus>
   start(input: z.infer<typeof ForegroundStartSchema>): Promise<ForegroundStatus>
   pause(): Promise<ForegroundStatus>

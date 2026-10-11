@@ -99,6 +99,7 @@ vi.mock('../../src/core/rpa/util', () => ({
   })
 }))
 import { ForegroundWechatDriver } from '../../src/main/services/foreground-wechat-driver'
+import type { PersonalStickerStore } from '../../src/main/services/personal-sticker-store'
 
 const visual = (inputText = '', messages = [{ direction: 'inbound', text: '问题' }]) => ({
   contact: 'Q',
@@ -189,6 +190,108 @@ async function connected() {
   return { driver, signal, observation }
 }
 describe('project foreground sender boundaries', () => {
+  it.each([true, false])(
+    'sends an image only after draft and receipt verification: receipt=%s',
+    async (verifiedReceipt) => {
+      const assetId = '00000000-0000-4000-8000-000000000001',
+        png = await new Jimp({ width: 32, height: 32, color: 0xffcc00ff }).getBuffer('image/png')
+      const sent = vi.fn()
+      const stickerStore = {
+        load: async () => ({ png, dib: Buffer.alloc(44) }),
+        sent
+      } as unknown as PersonalStickerStore
+      const driver = new ForegroundWechatDriver(
+        () => ({ vision: model, reply: model, rules: '回复', revision: f.revision, stickerStore }),
+        {
+          ...windows,
+          pasteImage: async () => {
+            changeScreen(400, 470)
+          }
+        }
+      )
+      const signal = controller().signal
+      await advance(driver.connect('Q', signal, 'current_chat'))
+      f.fetch.mockResolvedValueOnce(response(visual()))
+      const before = await advance(driver.read(signal))
+      f.fetch
+        .mockResolvedValueOnce(
+          response({
+            contact: 'Q',
+            privateChat: true,
+            matchingDraft: true,
+            draftImageCount: 1,
+            draftTextEmpty: true,
+            overlay: false
+          })
+        )
+        .mockResolvedValueOnce(
+          response(
+            visual('', [
+              { direction: 'inbound', text: '问题' },
+              { direction: 'system', text: '[非文本消息]' }
+            ])
+          )
+        )
+        .mockResolvedValueOnce(
+          response({
+            contact: 'Q',
+            privateChat: true,
+            latestOutboundMatches: verifiedReceipt,
+            editorEmpty: true,
+            outboundImageCount: 1
+          })
+        )
+      expect(await advance(driver.dispatchImage(before, { kind: 'image', assetId }, signal))).toBe(
+        verifiedReceipt ? 'sent' : 'unknown'
+      )
+      expect(f.tap.mock.calls).toEqual([['enter']])
+      expect(sent).toHaveBeenCalledTimes(verifiedReceipt ? 1 : 0)
+    }
+  )
+  it('never sends an image when the pasted preview belongs to another conversation', async () => {
+    const png = await new Jimp({ width: 32, height: 32, color: 0xffcc00ff }).getBuffer('image/png')
+    const driver = new ForegroundWechatDriver(
+      () => ({
+        vision: model,
+        reply: model,
+        rules: '回复',
+        revision: f.revision,
+        stickerStore: {
+          load: async () => ({ png, dib: Buffer.alloc(44) })
+        } as unknown as PersonalStickerStore
+      }),
+      {
+        ...windows,
+        pasteImage: async () => {
+          changeScreen(400, 470)
+        }
+      }
+    )
+    const signal = controller().signal
+    await advance(driver.connect('Q', signal, 'current_chat'))
+    f.fetch.mockResolvedValueOnce(response(visual()))
+    const before = await advance(driver.read(signal))
+    f.fetch.mockResolvedValueOnce(
+      response({
+        contact: 'wrong',
+        privateChat: true,
+        matchingDraft: true,
+        draftImageCount: 1,
+        draftTextEmpty: true,
+        overlay: false
+      })
+    )
+    expect(
+      await advance(
+        driver.dispatchImage(
+          before,
+          { kind: 'image', assetId: '00000000-0000-4000-8000-000000000001' },
+          signal
+        )
+      )
+    ).toBe('not_sent')
+    expect(f.tap).not.toHaveBeenCalled()
+  })
   it('waits without vision requests or input while a notification covers the foreground chat', async () => {
     const t = await connected()
     const calls = f.fetch.mock.calls.length
@@ -1060,6 +1163,14 @@ describe('project foreground sender boundaries', () => {
     f.revision = 'new-rules'
     f.fetch.mockResolvedValueOnce(response(listVisual()))
     await advance(t.driver.listPage(t.signal))
+    expect(f.fetch).toHaveBeenCalledTimes(calls + 1)
+  })
+  it('invalidates the list current-contact cache when only the right title changes', async () => {
+    const t = await listed()
+    const calls = f.fetch.mock.calls.length
+    changeScreen(500, 40)
+    f.fetch.mockResolvedValueOnce(response({ ...listVisual(), currentContact: 'pp' }))
+    expect((await t.driver.listPage(t.signal)).currentContact).toBe('pp')
     expect(f.fetch).toHaveBeenCalledTimes(calls + 1)
   })
   it('verifies a plain unread dot using its current pixels and never guesses a count', async () => {
