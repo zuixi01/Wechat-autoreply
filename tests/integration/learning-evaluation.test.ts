@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+// Cold tsx startup exceeds the ordinary 5 s unit-test budget on this PC.
+vi.setConfig({ testTimeout: 30000 })
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
 import { execFile } from 'node:child_process'

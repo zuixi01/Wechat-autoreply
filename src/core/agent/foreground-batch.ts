@@ -85,6 +85,7 @@ export class ForegroundBatchRuntime {
       issues: [...this.issues].map(([target, reason]) => ({ target, reason })),
       records: [
         ...(this.journal.unresolved?.() ?? []).slice(0, 50),
+        ...(this.journal.handoffs?.() ?? []).slice(0, 50),
         ...this.journal.list(50).slice(-50).reverse()
       ]
         .filter((record, index, all) => all.findIndex((value) => value.id === record.id) === index)
@@ -235,7 +236,18 @@ export class ForegroundBatchRuntime {
           if (
             new Set(names).size !== names.length ||
             page.rows.some(
-              (row) => !row.nameComplete || !this.knownRows.some((old) => old.name === row.name)
+              (row) =>
+                !row.nameComplete ||
+                !this.knownRows.some((old) => old.name === row.name) ||
+                (this.targets.includes(row.name) &&
+                  row.unread !== 0 &&
+                  this.knownRows.some(
+                    (old) =>
+                      old.name === row.name &&
+                      (old.preview !== row.preview ||
+                        old.unread !== row.unread ||
+                        Boolean(old.unreadDot) !== Boolean(row.unreadDot))
+                  ))
             )
           )
             this.lastScanAt = 0

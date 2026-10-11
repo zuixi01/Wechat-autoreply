@@ -190,9 +190,14 @@ async function connected() {
   return { driver, signal, observation }
 }
 describe('project foreground sender boundaries', () => {
-  it.each([true, false])(
-    'sends an image only after draft and receipt verification: receipt=%s',
-    async (verifiedReceipt) => {
+  it.each(['confirmed', 'unverified', 'unchanged_history', 'incoming_only'])(
+    'sends an image only after draft and receipt verification: %s',
+    async (receiptCase) => {
+      const verifiedReceipt = receiptCase !== 'unverified'
+      const oldImages = [
+        { direction: 'system', text: '[非文本消息]' },
+        { direction: 'system', text: '[非文本消息]' }
+      ]
       const assetId = '00000000-0000-4000-8000-000000000001',
         png = await new Jimp({ width: 32, height: 32, color: 0xffcc00ff }).getBuffer('image/png')
       const sent = vi.fn()
@@ -211,7 +216,15 @@ describe('project foreground sender boundaries', () => {
       )
       const signal = controller().signal
       await advance(driver.connect('Q', signal, 'current_chat'))
-      f.fetch.mockResolvedValueOnce(response(visual()))
+      f.fetch.mockResolvedValueOnce(
+        response(
+          receiptCase === 'unchanged_history'
+            ? visual('', oldImages)
+            : receiptCase === 'incoming_only'
+              ? visual('', oldImages.slice(0, 1))
+              : visual()
+        )
+      )
       const before = await advance(driver.read(signal))
       f.fetch
         .mockResolvedValueOnce(
@@ -226,10 +239,15 @@ describe('project foreground sender boundaries', () => {
         )
         .mockResolvedValueOnce(
           response(
-            visual('', [
-              { direction: 'inbound', text: '问题' },
-              { direction: 'system', text: '[非文本消息]' }
-            ])
+            visual(
+              '',
+              receiptCase === 'unchanged_history' || receiptCase === 'incoming_only'
+                ? oldImages
+                : [
+                    { direction: 'inbound', text: '问题' },
+                    { direction: 'system', text: '[非文本消息]' }
+                  ]
+            )
           )
         )
         .mockResolvedValueOnce(
@@ -237,15 +255,16 @@ describe('project foreground sender boundaries', () => {
             contact: 'Q',
             privateChat: true,
             latestOutboundMatches: verifiedReceipt,
+            newOutboundMatches: receiptCase === 'confirmed',
             editorEmpty: true,
             outboundImageCount: 1
           })
         )
       expect(await advance(driver.dispatchImage(before, { kind: 'image', assetId }, signal))).toBe(
-        verifiedReceipt ? 'sent' : 'unknown'
+        receiptCase === 'confirmed' ? 'sent' : 'unknown'
       )
       expect(f.tap.mock.calls).toEqual([['enter']])
-      expect(sent).toHaveBeenCalledTimes(verifiedReceipt ? 1 : 0)
+      expect(sent).toHaveBeenCalledTimes(receiptCase === 'confirmed' ? 1 : 0)
     }
   )
   it('never sends an image when the pasted preview belongs to another conversation', async () => {

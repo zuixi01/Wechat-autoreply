@@ -351,9 +351,10 @@ export function registerJevCalibratedHoldoutTests(
       maxRunAttempts: 1000
     })
     fixturePhase('execution_ready')
-  }, 20000)
-  // Every arm still executes all 100 cases through the real core/clients/journal.
-  // Each complete arm retains its original 20-second setup ceiling.
+  }, 60000)
+  // Each arm still executes all 100 cases through the real core/clients/journal.
+  // A cold Windows SQL fixture needs headroom beyond 20 seconds; counts,
+  // isolation checks and provider execution limits remain unchanged.
   for (const arm of ['A', 'B', 'C'] as const)
     beforeAll(async () => {
       fixturePhase(`arm_${arm}_start`)
@@ -394,7 +395,7 @@ export function registerJevCalibratedHoldoutTests(
       } finally {
         blocked.mockRestore()
       }
-    }, 20000)
+    }, 60000)
   beforeAll(async () => {
     fixturePhase('blind_review_start')
     expect(artifacts).toHaveLength(300)
@@ -455,7 +456,7 @@ export function registerJevCalibratedHoldoutTests(
       ['settings', settings()]
     ] as const)
       await writePrivateJson(join(directory, `${name}.private.json`), value)
-  }, 20000)
+  }, 60000)
   beforeEach(async () => {
     network = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('real_http_forbidden'))
     await privileged(`TRUNCATE jev_holdout_lineages; ALTER TABLE jev_replay_executions DISABLE TRIGGER USER;

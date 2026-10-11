@@ -124,6 +124,48 @@ function fixture(count = 15, persisted?: SqliteForegroundJournal) {
   }
 }
 describe('foreground batch scanning and processing', () => {
+  it('revalidates uniqueness when a new unread row has a previously known title', async () => {
+    const f = fixture(2)
+    f.rows[1].unread = 0
+    let changed = false,
+      page = 0
+    f.navigator.top = vi.fn(async () => {
+      page = 0
+    })
+    f.navigator.down = vi.fn(async () => {
+      page = 1
+    })
+    f.navigator.page = vi.fn(async () => ({
+      rows: !changed
+        ? structuredClone(f.rows)
+        : page === 0
+          ? [
+              { ...f.rows[1], unread: 1, preview: 'new duplicate question' },
+              { ...f.rows[0], unread: 0 }
+            ]
+          : [
+              { ...f.rows[0], unread: 0 },
+              { ...f.rows[1], unread: 0 }
+            ],
+      atTop: page === 0,
+      atBottom: !changed || page === 1
+    }))
+    await f.runtime.start(['客户0', '客户1'])
+    await f.runtime.tick()
+    changed = true
+    f.observations
+      .get('客户1')!
+      .messages.push({ direction: 'inbound', text: 'new duplicate question' })
+    await f.runtime.tick()
+    expect(
+      f.records.filter((record) => record.target === '客户1' && record.state === 'sent')
+    ).toHaveLength(0)
+    expect(f.runtime.status().issues).toContainEqual({
+      target: '客户1',
+      reason: 'contact_not_unique'
+    })
+    await f.runtime.pause()
+  })
   it('does not block the desktop queue while one contact waits for its model response', async () => {
     const f = fixture(2)
     let release: (text: string) => void = () => {}

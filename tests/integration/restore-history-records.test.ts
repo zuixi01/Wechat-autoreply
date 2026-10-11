@@ -30,6 +30,10 @@ import { restoreCompletionInputFixture } from '../fixtures/restore-completion'
 import { readRestoreCompletionAudit } from '../../server/src/admin/restore-completion-audit'
 import { RestoreAdmissionMaintenance } from '../../server/src/recovery/restore-admission'
 
+// These tests execute full SQL recovery reviews on PGlite. A cold Windows run
+// can exceed five seconds without an application timeout or changed result.
+vi.setConfig({ testTimeout: 30000 })
+
 let pg: Awaited<ReturnType<typeof embeddedPostgres>>, admin: Administration
 let f: ReturnType<typeof historyFixture>
 let requirement: ReturnType<typeof RestoreHistoryRequirementRecordSchema.parse>
@@ -1364,9 +1368,9 @@ it('exposes only authenticated complete account audit metadata through the stric
   ).rejects.toThrow('DENIED')
 })
 it('returns an exact already committed declaration after real expiry without pretending the original approval is current', async () => {
-  // Expiry needs no permit reconciliation; keep the short real-clock window
-  // focused on recording and retrieving the immutable declaration.
-  const c = await completionDeclarationFixture(4000, false),
+  // Allow the SQL review to finish before expiry, then still wait for and
+  // assert genuine database-clock expiry rather than substituting a fake clock.
+  const c = await completionDeclarationFixture(10000, false),
     ack = await c.service.acknowledge(credential, c.input),
     a = c.p.authorization
   await new Promise((resolve) => setTimeout(resolve, Math.max(0, a.expiresAt - Date.now() + 20)))

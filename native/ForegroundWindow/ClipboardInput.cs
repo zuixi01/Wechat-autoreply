@@ -164,11 +164,13 @@ internal sealed class ClipboardInput : IDisposable {
     handle=0;sequence=GetClipboardSequenceNumber();
    } finally {CloseClipboard();}
   } finally {if(handle!=0) GlobalFree(handle);}
-  guard();key(0x56,true);Wait(120);guard();
+  try {guard();key(0x56,true);Wait(120);guard();}
+  finally {
   // Closing a DIB clipboard can synthesize CF_BITMAP and advance the sequence.
   // Only acknowledge it while this hidden window still owns the clipboard;
   // a newer clipboard copied by the user must never be restored over.
   Open();try {if(GetClipboardOwner()==owner) sequence=GetClipboardSequenceNumber();} finally {CloseClipboard();}
+  }
  }
  public void Dispose() {
   try {

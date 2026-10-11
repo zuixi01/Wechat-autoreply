@@ -205,22 +205,53 @@ export default function PersonalWechatBatchControls({
       {Boolean(status?.records.length) && (
         <div aria-label="批量微信回复记录">
           <h3>回复记录</h3>
-          {status!.records.slice(0, 8).map((record) => (
-            <article key={record.id} style={{ marginTop: 12, overflowWrap: 'anywhere' }}>
-              <strong>
-                {record.target} ·{' '}
-                {record.state === 'sent'
-                  ? '已确认发送'
-                  : record.state === 'unknown'
-                    ? '结果待核对'
-                    : record.state === 'handoff'
-                      ? '待本人处理'
-                      : '未发送'}
-              </strong>
-              <p>收到：{record.question}</p>
-              <p>回复：{record.reply}</p>
-            </article>
-          ))}
+          {status!.records
+            .slice(
+              0,
+              Math.max(
+                8,
+                status!.records.filter(
+                  (record) =>
+                    record.state === 'unknown' ||
+                    (record.state === 'handoff' && record.handledAt === undefined)
+                ).length
+              )
+            )
+            .map((record) => (
+              <article key={record.id} style={{ marginTop: 12, overflowWrap: 'anywhere' }}>
+                <strong>
+                  {record.target} ·{' '}
+                  {record.state === 'sent'
+                    ? '已确认发送'
+                    : record.state === 'unknown'
+                      ? '结果待核对'
+                      : record.state === 'handoff'
+                        ? record.handledAt === undefined
+                          ? '待本人处理'
+                          : '本人已处理'
+                        : '未发送'}
+                </strong>
+                <p>收到：{record.question}</p>
+                <p>回复：{record.reply}</p>
+                {record.state === 'handoff' && record.handledAt === undefined && (
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    disabled={busy}
+                    onClick={() => {
+                      setBusy(true)
+                      void window.foregroundWechat
+                        .acknowledgeHandoff(record.id)
+                        .then(() => window.foregroundWechat.batchStatus())
+                        .then((value) => setStatus(BatchStatusSchema.parse(value)))
+                        .catch(() => setError('处理状态未保存，请重试。'))
+                        .finally(() => setBusy(false))
+                    }}
+                  >
+                    已由本人处理
+                  </button>
+                )}
+              </article>
+            ))}
         </div>
       )}
     </section>

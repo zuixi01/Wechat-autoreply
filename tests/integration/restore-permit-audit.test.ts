@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest'
+
+// The 1001-row pagination audit performs actual embedded PostgreSQL writes.
+vi.setConfig({ testTimeout: 20000 })
 import { embeddedPostgres } from '../fixtures/embedded-postgres'
 import { Administration } from '../../server/src/admin/administration'
 import { AccountAuthority, tokenHash } from '../../server/src/auth/account-authority'

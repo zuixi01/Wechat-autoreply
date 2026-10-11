@@ -164,7 +164,14 @@ export class ForegroundWechatDriver implements ForegroundDriver {
   private receiptReading = false
   private receiptReadback = false
   private pendingSend?: { observation: ForegroundObservation; text: string; evidence: Evidence }
-  private pendingImage?: { observation: ForegroundObservation; assetId: string; png: Buffer }
+  private pendingImage?: {
+    observation: ForegroundObservation
+    assetId: string
+    png: Buffer
+    historyArea: z.infer<typeof area>
+    historyFingerprint: string
+    before: Capture['pixels']
+  }
   private lastReceiptFingerprint?: string
   receiptFingerprint(): string | undefined {
     return this.lastReceiptFingerprint
@@ -639,7 +646,10 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       robot.mouseClick('left')
     })
   }
-  private fingerprint(image: Capture['pixels'], visual: z.infer<typeof VisualChatSchema>): string {
+  private fingerprint(
+    image: Capture['pixels'],
+    visual: Pick<z.infer<typeof VisualChatSchema>, 'header' | 'history' | 'input'>
+  ): string {
     const hash = createHash('sha256')
     for (const [x, y, w, h] of [visual.header, visual.history, visual.input]) {
       const left = Math.floor(x * image.width),
@@ -1579,7 +1589,19 @@ export class ForegroundWechatDriver implements ForegroundDriver {
           createHash('sha256').update(draft.pixels.data).digest('hex')
       )
         throw new Error('send_screen_changed')
-      this.pendingImage = { observation, assetId: part.assetId, png: asset.png }
+      const historyArea = evidence.visual.history
+      this.pendingImage = {
+        observation,
+        assetId: part.assetId,
+        png: asset.png,
+        historyArea,
+        historyFingerprint: this.fingerprint(evidence.capture.pixels, {
+          header: historyArea,
+          history: historyArea,
+          input: historyArea
+        }),
+        before: { ...evidence.capture.pixels, data: Buffer.from(evidence.capture.pixels.data) }
+      }
       entered = true
       robot.keyTap('enter')
       return await this.checkImageReceipt(signal)
@@ -1608,18 +1630,38 @@ export class ForegroundWechatDriver implements ForegroundDriver {
         echo.revision !== pending.observation.revision
       )
         throw new Error('send_context_changed')
+      if (
+        sameForegroundMessages(echo.messages, pending.observation.messages) ||
+        this.fingerprint(capture.pixels, {
+          header: pending.historyArea,
+          history: pending.historyArea,
+          input: pending.historyArea
+        }) === pending.historyFingerprint
+      )
+        throw new Error('send_echo_unverified')
       const receipt = z
         .strictObject({
           contact: z.string(),
           privateChat: z.boolean(),
           latestOutboundMatches: z.boolean(),
+          newOutboundMatches: z.boolean().default(false),
           editorEmpty: z.boolean(),
           outboundImageCount: z.number().int()
         })
         .parse(
           await this.vision(
-            capture,
-            '第一张图是当前微信，第二张是本次发送的表情图片。返回 contact（实际聊天标题）、privateChat、latestOutboundMatches（正文最下方新外发图片确实与第二张相同，左侧收到的图片不算）、editorEmpty（输入区无文字和待发图片）、outboundImageCount（本轮末尾外发图片数）。不要把待发预览当已发回显，不确定时 latestOutboundMatches=false。',
+            {
+              ...capture,
+              image: undefined,
+              pixels: new Jimp({
+                width: Math.max(pending.before.width, capture.pixels.width),
+                height: pending.before.height + capture.pixels.height + 40,
+                color: 0xffffffff
+              })
+                .composite(new Jimp(pending.before), 0, 0)
+                .composite(new Jimp(capture.pixels), 0, pending.before.height + 40).bitmap
+            },
+            '第一张图上半部分是发送前微信，下半部分是发送后微信，中间白色间隔；第二张图是本次表情素材。比较前后正文，返回 contact（发送后实际聊天标题）、privateChat、latestOutboundMatches（发送后最下方外发图片与素材相同）、newOutboundMatches（能从前后位置和历史衔接证明新增了这张右侧外发图片，原有相同图片或只有新增左侧来图不能算）、editorEmpty（发送后输入区无文字和待发图片）、outboundImageCount（相比发送前新增的右侧外发图片数）。不能把待发预览、旧图片或新增左侧来图当成功回显；前后衔接不明或不能证明新增时 newOutboundMatches=false。',
             signal,
             pending.png
           )
@@ -1651,6 +1693,7 @@ export class ForegroundWechatDriver implements ForegroundDriver {
         receipt.contact !== this.target ||
         !receipt.privateChat ||
         !receipt.latestOutboundMatches ||
+        !receipt.newOutboundMatches ||
         !receipt.editorEmpty ||
         receipt.outboundImageCount !== 1
       )

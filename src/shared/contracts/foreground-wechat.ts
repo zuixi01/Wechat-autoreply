@@ -29,6 +29,7 @@ export const ForegroundRecordSchema = z.strictObject({
   planId: z.string().uuid().optional(),
   partIndex: z.number().int().min(0).max(2).optional(),
   part: ReplyPartSchema.optional(),
+  handledAt: z.number().int().nonnegative().optional(),
   failureReason: z.string().max(128).optional(),
   failureStage: z
     .enum(['before_input', 'input', 'draft_validation', 'before_enter', 'receipt'])
@@ -126,6 +127,7 @@ export interface ForegroundDesktopApi extends PersonalResourcesApi {
   start(input: z.infer<typeof ForegroundStartSchema>): Promise<ForegroundStatus>
   pause(): Promise<ForegroundStatus>
   resolve(input: z.infer<typeof ForegroundResolutionSchema>): Promise<ForegroundStatus>
+  acknowledgeHandoff(id: string): Promise<void>
   batchStatus(): Promise<BatchStatus>
   batchStart(input: {
     targets: string[]

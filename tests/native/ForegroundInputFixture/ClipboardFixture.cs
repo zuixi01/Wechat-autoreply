@@ -108,6 +108,12 @@ internal static class ClipboardFixture {
     transfer.PasteImage(dib,(key,control)=>{check(key==0x56 && control,"image transfer only pastes, never sends");pasteKeys++;check(IsClipboardFormatAvailable(8),"validated DIB available at paste time");},()=>{});
    }
    check(pasteKeys==1,"one image paste only");check(Fingerprint(editor)==before,"image transfer restores original clipboard");
+   var guardCalls=0;var cancelled=false;
+   try {using(var transfer=new ClipboardInput()) {
+    transfer.PasteImage(dib,(_,_)=>{},()=>{if(++guardCalls==3) throw new Exception("cancelled");});
+   }} catch(Exception error) when(error.Message=="cancelled") {cancelled=true;}
+   check(cancelled,"image transfer cancellation observed after paste");
+   check(Fingerprint(editor)==before,"cancelled image transfer restores original clipboard");
    using(var transfer=new ClipboardInput()) {
     var rejected=false;
     try {transfer.PasteImage(new byte[60],(_,_)=>throw new Exception("unexpected input"),()=>{});} catch(Exception error) when(error.Message=="image_invalid") {rejected=true;}

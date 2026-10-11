@@ -41,6 +41,7 @@ export function registerForegroundWechatIpc(
   )
   const stickers = new PersonalStickerStore(join(userData, 'agent', 'stickers'))
   let closed = false
+  let listTarget = 'Q'
   const configured = (target: string): ForegroundConfiguration => ({
     ...configuration(target),
     ownerStyle: () => style.examples(target),
@@ -60,15 +61,15 @@ export function registerForegroundWechatIpc(
     }
   })
   const runtime = new ForegroundWechatRuntime(
-    new ForegroundWechatDriver(() => configured(runtime.status().target)),
+    new ForegroundWechatDriver(() => configured(runtime.activity().target)),
     journal,
     true,
     (value) => journal.saveSingle(value)
   )
   const batch = new ForegroundBatchRuntime(
     new ForegroundBatchNavigator(
-      new ForegroundWechatDriver(() => configured(batch.status().targets[0] ?? 'Q')),
-      () => batch.status().targets[0] ?? 'Q'
+      new ForegroundWechatDriver(() => configured(listTarget)),
+      () => listTarget
     ),
     (target) => {
       const driver = new ForegroundWechatDriver(() => configured(target))
@@ -137,7 +138,8 @@ export function registerForegroundWechatIpc(
       .parse(raw)
     if (input.delete) stickers.delete(input.id)
     else {
-      const { id, delete: _delete, ...patch } = input
+      const { id, ...patch } = input
+      delete patch.delete
       stickers.update(id, patch)
     }
   })
@@ -212,9 +214,14 @@ export function registerForegroundWechatIpc(
     trusted(event)
     return batch.status()
   })
+  ipcMain.handle('foreground-wechat:acknowledge-handoff', (event, raw: unknown) => {
+    trusted(event)
+    journal.acknowledgeHandoff(z.string().uuid().parse(raw))
+  })
   ipcMain.handle('foreground-wechat:batch-start', async (event, raw: unknown) => {
     trusted(event)
     const input = BatchStartSchema.parse(raw)
+    listTarget = input.targets[0]
     if (starting) throw new Error('personal_mode_busy')
     starting = true
     const epoch = ++operation

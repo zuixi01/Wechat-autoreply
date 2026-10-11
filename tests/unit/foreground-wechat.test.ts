@@ -14,7 +14,9 @@ import type {
 } from '../../src/shared/contracts/foreground-wechat'
 
 const msg = (text: string, direction: 'inbound' | 'outbound' = 'inbound') => ({ text, direction })
-const observation = (texts = [msg('历史消息')]): ForegroundObservation => ({
+const observation = (
+  texts: ForegroundObservation['messages'] = [msg('历史消息')]
+): ForegroundObservation => ({
   windowToken: 'instance-1',
   contact: 'Q',
   privateChat: true,
@@ -57,8 +59,10 @@ describe('project-owned foreground WeChat runtime', () => {
     f.set(observation([msg('旧问题'), msg('旧回复', 'outbound'), msg('新问题'), msg('补充新问题')]))
     await f.runtime.start('Q', 'current_chat', { count: null, preview: '补充新问题' })
     await f.runtime.tick()
-    expect(f.records.filter(row => row.state === 'sent').map(row => row.question)).toEqual(['补充新问题'])
-    expect(f.records.find(row => row.state === 'handoff')?.question).toBe('新问题')
+    expect(f.records.filter((row) => row.state === 'sent').map((row) => row.question)).toEqual([
+      '补充新问题'
+    ])
+    expect(f.records.find((row) => row.state === 'handoff')?.question).toBe('新问题')
   })
   it('refuses an unknown-count tail with an unverified preview or truncated maximum history', async () => {
     const f = fixture()
@@ -98,7 +102,7 @@ describe('project-owned foreground WeChat runtime', () => {
     f.set(observation([msg('历史消息'), msg('新问题')]))
     f.driver.dispatchFailure = vi.fn(() => ({
       failureReason: 'screen_obscured',
-      failureStage: 'before_input'
+      failureStage: 'before_input' as const
     }))
     vi.mocked(f.driver.dispatch).mockResolvedValueOnce('not_sent')
     await f.runtime.tick()
@@ -117,7 +121,7 @@ describe('project-owned foreground WeChat runtime', () => {
     f.set(observation([msg('历史消息'), msg('需要回复的新消息')]))
     f.driver.dispatchFailure = vi.fn(() => ({
       failureReason: 'send_screen_changed',
-      failureStage: 'before_input'
+      failureStage: 'before_input' as const
     }))
     vi.mocked(f.driver.dispatch).mockResolvedValueOnce('not_sent')
     await f.runtime.tick()
@@ -141,7 +145,7 @@ describe('project-owned foreground WeChat runtime', () => {
     f.set(observation([msg('历史消息'), msg('新消息')]))
     f.driver.dispatchFailure = vi.fn(() => ({
       failureReason: 'send_draft_mismatch',
-      failureStage: 'draft_validation'
+      failureStage: 'draft_validation' as const
     }))
     vi.mocked(f.driver.dispatch).mockResolvedValue('not_sent')
     await f.runtime.tick()
@@ -282,7 +286,7 @@ describe('project-owned foreground WeChat runtime', () => {
     await f.runtime.start('Q')
     f.set(observation([msg('历史消息'), msg('第一问')]))
     f.driver.dispatchFailure = vi.fn(() => ({
-      failureStage: 'receipt',
+      failureStage: 'receipt' as const,
       failureReason: 'send_echo_unverified'
     }))
     f.driver.verifyReceipt = vi.fn().mockResolvedValueOnce('unknown').mockResolvedValueOnce('sent')
@@ -310,7 +314,7 @@ describe('project-owned foreground WeChat runtime', () => {
     await f.runtime.start('Q')
     f.set(observation([msg('历史消息'), msg('第一问')]))
     f.driver.dispatchFailure = vi.fn(() => ({
-      failureStage: 'receipt',
+      failureStage: 'receipt' as const,
       failureReason: 'send_echo_unverified'
     }))
     f.driver.verifyReceipt = vi.fn().mockResolvedValue('unknown')

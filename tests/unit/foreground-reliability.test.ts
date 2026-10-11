@@ -36,6 +36,54 @@ function fixture() {
   return { db, view, driver, runtime, generations: () => generations }
 }
 describe('durable foreground progress regressions', () => {
+  it('retains a first unread media preview as a durable handoff and continues later text', async () => {
+    const f = fixture()
+    try {
+      f.view.messages.push({ direction: 'system', text: '[非文本消息]' })
+      await f.runtime.start('test', 'current_chat', { count: 1, preview: '[图片]' })
+      await f.runtime.tick()
+      expect(
+        f.db.list().filter((record) => record.failureReason === 'media_requires_owner')
+      ).toHaveLength(1)
+      f.view.messages.push(msg('later normal question'))
+      await f.runtime.tick()
+      expect(
+        f.db
+          .list()
+          .filter((record) => record.state === 'sent')
+          .map((record) => record.question)
+      ).toEqual(['later normal question'])
+    } finally {
+      await f.runtime.pause()
+      f.db.close()
+    }
+  })
+  it('keeps outstanding owner handoffs visible after fifty newer successful replies', async () => {
+    const f = fixture()
+    try {
+      f.driver.generate = async () => null
+      await f.runtime.start('test', 'current_chat')
+      f.view.messages.push(msg('owner question'))
+      await f.runtime.tick()
+      const handoff = f.db.list()[0]
+      for (let n = 0; n < 51; n++)
+        f.db.save({
+          ...handoff,
+          id: crypto.randomUUID(),
+          state: 'sent',
+          reply: 'done',
+          createdAt: handoff.createdAt + n + 1
+        })
+      expect(f.runtime.status().records.some((record) => record.id === handoff.id)).toBe(true)
+      f.db.acknowledgeHandoff(handoff.id)
+      expect(f.runtime.status().records.some((record) => record.id === handoff.id)).toBe(false)
+      f.db.save(handoff)
+      expect(f.db.handoffs()).toEqual([])
+    } finally {
+      await f.runtime.pause()
+      f.db.close()
+    }
+  })
   it('does not duplicate a media handoff when generation is retried', async () => {
     const f = fixture()
     let attempts = 0

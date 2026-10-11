@@ -237,7 +237,14 @@ export default function PersonalWechatControls({ active }: { active: boolean }):
             {status!.records
               .slice(
                 0,
-                Math.max(8, status!.records.filter((row) => row.state === 'unknown').length)
+                Math.max(
+                  8,
+                  status!.records.filter(
+                    (row) =>
+                      row.state === 'unknown' ||
+                      (row.state === 'handoff' && row.handledAt === undefined)
+                  ).length
+                )
               )
               .map((row) => (
                 <article key={row.id} style={{ marginTop: 12, overflowWrap: 'anywhere' }}>
@@ -248,13 +255,32 @@ export default function PersonalWechatControls({ active }: { active: boolean }):
                       : row.state === 'unknown'
                         ? '结果待核对'
                         : row.state === 'handoff'
-                          ? '待本人处理'
+                          ? row.handledAt === undefined
+                            ? '待本人处理'
+                            : '本人已处理'
                           : '未发送'}
                   </strong>
                   <p>收到：{row.question}</p>
                   <p>回复：{row.reply}</p>
                   {row.failureReason && (
                     <p>原因：{reasons[row.failureReason] ?? row.failureReason}</p>
+                  )}
+                  {row.state === 'handoff' && row.handledAt === undefined && (
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      disabled={busy}
+                      onClick={() => {
+                        setBusy(true)
+                        void window.foregroundWechat
+                          .acknowledgeHandoff(row.id)
+                          .then(() => window.foregroundWechat.status())
+                          .then((value) => setStatus(ForegroundStatusSchema.parse(value)))
+                          .catch(() => setError('处理状态未保存，请重试。'))
+                          .finally(() => setBusy(false))
+                      }}
+                    >
+                      已由本人处理
+                    </button>
                   )}
                   {row.state === 'unknown' && (
                     <div>

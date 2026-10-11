@@ -91,6 +91,22 @@ export class SqliteForegroundJournal implements ForegroundJournal, ForegroundBat
       .all(target)
       .map((row) => ForegroundRecordSchema.parse(JSON.parse(String(row.payload))).reply)
   }
+  handoffs(): ForegroundRecord[] {
+    return this.db
+      .prepare(
+        "SELECT payload FROM foreground_replies WHERE json_extract(payload,'$.state')='handoff' AND json_extract(payload,'$.handledAt') IS NULL ORDER BY created_at,rowid LIMIT 50"
+      )
+      .all()
+      .map((row) => ForegroundRecordSchema.parse(JSON.parse(String(row.payload))))
+  }
+  acknowledgeHandoff(id: string): void {
+    z.string().uuid().parse(id)
+    const row = this.db.prepare('SELECT payload FROM foreground_replies WHERE id=?').get(id)
+    if (!row) throw new Error('handoff_not_found')
+    const record = ForegroundRecordSchema.parse(JSON.parse(String(row.payload)))
+    if (record.state !== 'handoff') throw new Error('handoff_invalid')
+    this.save({ ...record, handledAt: record.handledAt ?? Date.now() })
+  }
   private generatedHash(text: string): string {
     return createHash('sha256').update(ownerStyleKey(text)).digest('hex')
   }
@@ -243,6 +259,14 @@ export class SqliteForegroundJournal implements ForegroundJournal, ForegroundBat
   }
   save(record: ForegroundRecord): void {
     const valid = ForegroundRecordSchema.parse(record)
+    if (valid.state === 'handoff' && valid.handledAt === undefined) {
+      const old = this.db
+        .prepare(
+          "SELECT json_extract(payload,'$.handledAt') AS handled_at FROM foreground_replies WHERE id=?"
+        )
+        .get(valid.id)
+      if (typeof old?.handled_at === 'number') valid.handledAt = old.handled_at
+    }
     this.markGenerated(valid.reply)
     this.db
       .prepare(

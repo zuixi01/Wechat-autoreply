@@ -18,6 +18,8 @@ import { verifyPrivatePaths } from '../../src/core/persistence/private-backup-di
 import { embeddedPostgres } from '../fixtures/embedded-postgres'
 
 // Synthetic protocol and ACL fixtures. These are not independent business accuracy evidence.
+// Complete 100-case SQL setup can exceed 20 seconds on a cold Windows run;
+// the test budgets below do not alter replay execution limits or assertions.
 const id = randomUUID(),
   login = `jev_command_${id.replaceAll('-', '')}`,
   reviewerLogin = `jev_reviewer_${id.replaceAll('-', '')}`
@@ -292,10 +294,10 @@ beforeAll(async () => {
       minimumAutomaticReplies: 30
     }
   })
-}, 20000)
+}, 60000)
 
 // Keep the complete 100-case/300-arm execution out of the fixed five-second test deadline.
-// The same existing integration-fixture hook ceiling is retained, rather than shrinking the cut.
+// The bounded setup budget preserves the full cut on slower Windows SQL runs.
 beforeAll(async () => {
   const network = vi
     .spyOn(globalThis, 'fetch')
@@ -330,7 +332,7 @@ beforeAll(async () => {
   } finally {
     network.mockRestore()
   }
-}, 20000)
+}, 60000)
 
 beforeAll(async () => {
   const network = vi
@@ -360,7 +362,7 @@ beforeAll(async () => {
   } finally {
     network.mockRestore()
   }
-}, 20000)
+}, 60000)
 
 // The complete packet is submitted using a distinct, ordinary database reviewer identity.
 beforeAll(async () => {
@@ -391,7 +393,7 @@ beforeAll(async () => {
   } finally {
     network.mockRestore()
   }
-}, 20000)
+}, 60000)
 
 beforeEach(async () => {
   await switchLogin()

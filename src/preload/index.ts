@@ -146,6 +146,8 @@ if (process.contextIsolated) {
       start: (input: unknown) => ipcRenderer.invoke('foreground-wechat:start', input),
       pause: () => ipcRenderer.invoke('foreground-wechat:pause'),
       resolve: (input: unknown) => ipcRenderer.invoke('foreground-wechat:resolve', input),
+      acknowledgeHandoff: (id: string) =>
+        ipcRenderer.invoke('foreground-wechat:acknowledge-handoff', id),
       batchStatus: () => ipcRenderer.invoke('foreground-wechat:batch-status'),
       batchStart: (input: unknown) => ipcRenderer.invoke('foreground-wechat:batch-start', input),
       batchPause: () => ipcRenderer.invoke('foreground-wechat:batch-pause'),

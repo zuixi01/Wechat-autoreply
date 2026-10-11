@@ -62,6 +62,7 @@ export interface ForegroundJournal {
   list(limit?: number): ForegroundRecord[]
   hasUnknown?(): boolean
   unresolved?(): ForegroundRecord[]
+  handoffs?(): ForegroundRecord[]
   save(record: ForegroundRecord): void
   complete?(record: ForegroundRecord, checkpoint: ForegroundCheckpoint): void
 }
@@ -147,6 +148,7 @@ export class ForegroundWechatRuntime {
       ...this.activity(),
       records: [
         ...(this.journal.unresolved?.() ?? []).slice(0, 50),
+        ...(this.journal.handoffs?.() ?? []).slice(0, 50),
         ...this.journal.list(50).slice(-50).reverse()
       ]
         .filter((record, index, all) => all.findIndex((value) => value.id === record.id) === index)
@@ -240,13 +242,18 @@ export class ForegroundWechatRuntime {
         } else start -= count
         const messages = baseline.messages.slice(Math.max(0, start))
         const prefix = preview.replace(/(?:\.\.\.|…)$/, '').trim()
+        const last = messages.at(-1)
+        const mediaPreview =
+          /^\[(?:图片|表情|动画表情|语音|视频|文件)\]$/.test(prefix) &&
+          last?.direction === 'system' &&
+          /非文本|non-text|图片|表情|语音|视频|文件/.test(last.text)
         if (
           (count !== null &&
             (!Number.isInteger(count) || count < 1 || count > 80 || messages.length !== count)) ||
           !messages.length ||
           messages.some((message) => message.direction === 'outbound') ||
           !prefix ||
-          !messages.at(-1)?.text.startsWith(prefix)
+          (!last?.text.startsWith(prefix) && !mediaPreview)
         )
           throw new Error('unread_message_unverified')
         this.baseline = { ...baseline, messages: baseline.messages.slice(0, start) }
