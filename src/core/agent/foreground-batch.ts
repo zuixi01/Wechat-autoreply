@@ -51,6 +51,8 @@ export class ForegroundBatchRuntime {
   private issues = new Map<string, string>()
   private sessions = new Map<string, ForegroundWechatRuntime>()
   private checkpoints = new Map<string, { row: ListRow; checkpoint?: ForegroundCheckpoint }>()
+  private knownRows: ListRow[] = []
+  private lastScanAt = 0
   private controller?: AbortController
   private work?: Promise<void>
   private timer?: ReturnType<typeof setTimeout>
@@ -98,6 +100,8 @@ export class ForegroundBatchRuntime {
     this.sessions.clear()
     this.issues.clear()
     this.queue = []
+    this.knownRows = []
+    this.lastScanAt = 0
     this.discovered = 0
     this.pages = 0
     this.complete = false
@@ -156,7 +160,7 @@ export class ForegroundBatchRuntime {
         ? Math.min(30000, 1000 * 2 ** Math.max(0, this.recoveryAttempts - 1))
         : this.state === 'waiting_foreground'
           ? 1000
-          : 1500
+          : 750
     this.nextRetryAt = this.state === 'recovering' ? Date.now() + delay : undefined
     this.timer = setTimeout(() => {
       void this.tick().finally(() => this.schedule())
@@ -203,11 +207,31 @@ export class ForegroundBatchRuntime {
         this.state = 'scanning'
         this.current = ''
         this.complete = false
-        const rows = await scanForegroundList(this.navigator, signal, (pages, rows) => {
-          if (signal.aborted) return
-          this.pages = pages
-          this.discovered = rows.length
-        })
+        let rows: ListRow[]
+        if (this.knownRows.length && Date.now() - this.lastScanAt < 30000) {
+          await this.navigator.top(signal)
+          const page = await this.navigator.page(signal)
+          // Reuse a recently verified directory, but read fresh badges at the top.
+          // A new/truncated/duplicate title requires the full uniqueness check again.
+          const names = page.rows.map((row) => row.name)
+          if (
+            new Set(names).size !== names.length ||
+            page.rows.some(
+              (row) => !row.nameComplete || !this.knownRows.some((old) => old.name === row.name)
+            )
+          )
+            this.lastScanAt = 0
+          rows = [...page.rows, ...this.knownRows.filter((old) => !names.includes(old.name))]
+        } else rows = []
+        if (!this.lastScanAt || Date.now() - this.lastScanAt >= 30000) {
+          rows = await scanForegroundList(this.navigator, signal, (pages, rows) => {
+            if (signal.aborted) return
+            this.pages = pages
+            this.discovered = rows.length
+          })
+          this.lastScanAt = Date.now()
+        }
+        this.knownRows = rows
         if (signal.aborted) return
         const names = new Map<string, number>()
         for (const row of rows)
@@ -216,7 +240,15 @@ export class ForegroundBatchRuntime {
           if ((names.get(name) ?? 0) > 1 || rows.some((row) => mayMatchTruncatedName(row, name)))
             this.issues.set(name, 'contact_not_unique')
           else if (!names.has(name)) this.issues.set(name, 'target_not_found')
-          else if (['target_not_found', 'contact_not_unique'].includes(this.issues.get(name) ?? ''))
+          else if (
+            [
+              'target_not_found',
+              'contact_not_unique',
+              'human_input',
+              'human_reply',
+              'unread_message_unverified'
+            ].includes(this.issues.get(name) ?? '')
+          )
             this.issues.delete(name)
           else if (this.issues.get(name) === 'unread_message_unverified') {
             const row = rows.find((value) => value.name === name && value.nameComplete)!
@@ -271,6 +303,9 @@ export class ForegroundBatchRuntime {
       }
       if (row.name !== this.navigator.currentContact?.())
         await findForegroundRow(this.navigator, row, signal, verifyPreview, this.navigationReady)
+      this.knownRows = this.knownRows.map((value) =>
+        value.name === row.name ? { ...value, unread: 0, unreadDot: false } : value
+      )
       this.navigationReady = true
       if (signal.aborted) return
       let session = this.sessions.get(row.name)
@@ -292,15 +327,22 @@ export class ForegroundBatchRuntime {
           this.checkpoints.get(row.name)?.checkpoint
         )
       } else if (
-        session.status().state === 'paused' &&
-        session.status().reason === 'foreground_lost'
+        session.activity().state === 'paused' &&
+        ['foreground_lost', 'human_input', 'human_reply', 'unread_message_unverified'].includes(
+          session.activity().reason
+        )
       ) {
-        await session.start(row.name, 'current_chat', { count: row.unread, preview: row.preview })
+        await session.start(
+          row.name,
+          'current_chat',
+          row.unread === 0 ? undefined : { count: row.unread, preview: row.preview },
+          this.checkpoints.get(row.name)?.checkpoint
+        )
       }
       if (signal.aborted) return
       await session.tick()
       if (signal.aborted) return
-      const status = session.status()
+      const status = session.activity()
       if (status.reason === 'send_unknown') {
         this.fail('send_unknown')
         return
@@ -312,12 +354,19 @@ export class ForegroundBatchRuntime {
       }
       if (status.state === 'paused') this.issues.set(row.name, status.reason)
       if (status.state === 'recovering') {
+        if (status.reason !== 'send_verifying' && this.queue.length > 1) {
+          this.queue.push(this.queue.shift()!)
+          return
+        }
         this.state = 'recovering'
         this.reason = status.reason
         this.recoveryAttempts = status.recoveryAttempts ?? 1
         return
       }
-      if (status.state === 'running' && session.hasPending()) return
+      if (status.state === 'running' && session.hasPending()) {
+        if (this.queue.length > 1) this.queue.push(this.queue.shift()!)
+        return
+      }
       this.queue.shift()
     } catch (error) {
       if (signal.aborted) return

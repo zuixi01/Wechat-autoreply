@@ -124,6 +124,81 @@ function fixture(count = 15, persisted?: SqliteForegroundJournal) {
   }
 }
 describe('foreground batch scanning and processing', () => {
+  it('lets the next contact reply while new text keeps invalidating the first draft', async () => {
+    const f = fixture(2)
+    const factory = (target: string) => {
+      const driver = f.factory(target)
+      if (target === '客户0')
+        driver.generate = async () => {
+          f.observations
+            .get(target)!
+            .messages.push({
+              direction: 'inbound',
+              text: `extra-${f.observations.get(target)!.messages.length}`
+            })
+          return 'stale draft'
+        }
+      return driver
+    }
+    const runtime = new ForegroundBatchRuntime(f.navigator, factory, f.journal, false)
+    try {
+      await runtime.start(['客户0', '客户1'])
+      for (let i = 0; i < 4; i++) await runtime.tick()
+      expect(f.records.some((record) => record.target === '客户1' && record.state === 'sent')).toBe(
+        true
+      )
+      expect(f.records.some((record) => record.target === '客户0')).toBe(false)
+    } finally {
+      await runtime.pause()
+    }
+  })
+  it('retries a contact after a temporary human draft is cleared', async () => {
+    const f = fixture(2)
+    f.observations.get('客户0')!.inputText = 'human draft'
+    try {
+      await f.runtime.start(['客户0', '客户1'])
+      await f.runtime.tick()
+      f.observations.get('客户0')!.inputText = ''
+      for (let i = 0; i < 5; i++) await f.runtime.tick()
+      expect(
+        f.records.filter((record) => record.target === '客户0' && record.state === 'sent')
+      ).toHaveLength(1)
+      expect(f.runtime.status().issues.some((issue) => issue.target === '客户0')).toBe(false)
+    } finally {
+      await f.runtime.pause()
+    }
+  })
+  it('does not let an unrelated overlap preview change prevent a ready target replying', async () => {
+    const f = fixture(12)
+    const down = f.navigator.down
+    f.navigator.down = async (signal) => {
+      f.rows[6].preview += '!'
+      await down(signal)
+    }
+    try {
+      await f.runtime.start(['客户0'])
+      await f.runtime.tick()
+      expect(f.records[0]).toMatchObject({ target: '客户0', state: 'sent' })
+    } finally {
+      await f.runtime.pause()
+    }
+  })
+  it('hands off an unread media item and still replies to the following text', async () => {
+    const f = fixture(1)
+    f.rows[0].unread = 2
+    f.observations
+      .get('客户0')!
+      .messages.splice(1, 0, { direction: 'system', text: '[non-text message]' })
+    try {
+      await f.runtime.start(['客户0'])
+      await f.runtime.tick()
+      expect(f.records.some((record) => record.state === 'handoff')).toBe(true)
+      expect(f.records.filter((record) => record.state === 'sent')).toHaveLength(1)
+      expect(f.records.find((record) => record.state === 'sent')?.question).toBe('问题0')
+    } finally {
+      await f.runtime.pause()
+    }
+  })
   it('shows an older unknown send ahead of the recent records when startup is blocked', async () => {
     const db = new SqliteForegroundJournal(':memory:'),
       f = fixture(1, db)

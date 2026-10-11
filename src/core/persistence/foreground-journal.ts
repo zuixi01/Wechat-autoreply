@@ -86,6 +86,12 @@ export class SqliteForegroundJournal implements ForegroundJournal, ForegroundBat
   saveSingle(value: ForegroundCheckpoint): void {
     this.transaction(() => this.writeSingle(value))
   }
+  complete(record: ForegroundRecord, checkpoint: ForegroundCheckpoint): void {
+    this.transaction(() => {
+      this.save(record)
+      this.writeSingle(checkpoint)
+    })
+  }
   private transaction(write: () => void): void {
     this.db.exec('BEGIN IMMEDIATE')
     try {
@@ -124,10 +130,22 @@ export class SqliteForegroundJournal implements ForegroundJournal, ForegroundBat
       this.db
         .prepare('INSERT INTO foreground_resolutions VALUES (?,?,?)')
         .run(valid.id, valid.state, Date.now())
-      // Manual reconciliation never authorizes replay. A subsequent explicit start
-      // establishes a new baseline for this contact, including in batch mode.
-      this.clearSingle(record.target)
-      this.db.prepare('DELETE FROM foreground_batch_checkpoints WHERE target=?').run(record.target)
+      // Settle this attempt only. Later messages remain beyond its exact source
+      // boundary and are still new after restart; never replay this attempt.
+      if (record.source)
+        this.writeSingle({
+          baseline: record.source,
+          ownEcho: valid.state === 'sent' ? record.reply : undefined,
+          pending: false
+        })
+      else {
+        // Old records lack a source boundary. Preserve the existing legacy
+        // manual-rebaseline behavior rather than inventing a message identity.
+        this.clearSingle(record.target)
+        this.db
+          .prepare('DELETE FROM foreground_batch_checkpoints WHERE target=?')
+          .run(record.target)
+      }
       this.db.exec('COMMIT')
     } catch (error) {
       this.db.exec('ROLLBACK')

@@ -11,6 +11,8 @@ const states: Record<BatchStatus['state'], string> = {
   paused: '已暂停'
 }
 const reasons: Record<string, string> = {
+  owner_decision_required: '需要本人决定，已保留待处理',
+  media_requires_owner: '需要本人查看的非文字消息',
   none: '',
   user_pause: '已停止批量回复。',
   foreground_lost: '切回微信后继续处理，无需重新启动。',
@@ -210,7 +212,9 @@ export default function PersonalWechatBatchControls({
                   ? '已确认发送'
                   : record.state === 'unknown'
                     ? '结果待核对'
-                    : '未发送'}
+                    : record.state === 'handoff'
+                      ? '待本人处理'
+                      : '未发送'}
               </strong>
               <p>收到：{record.question}</p>
               <p>回复：{record.reply}</p>

@@ -3,6 +3,7 @@ import type { BatchNavigator, ListRow } from '../../shared/contracts/foreground-
 
 export const rowKey = (row: ListRow): string =>
   hashContext([row.name, row.nameComplete, row.preview, row.unread, Boolean(row.unreadDot)])
+const identityKey = (row: ListRow): string => hashContext([row.name, row.nameComplete])
 export const mayMatchTruncatedName = (row: ListRow, name: string): boolean =>
   !row.nameComplete && name.startsWith(row.name.replace(/(?:\.\.\.|…)$/, '').trim())
 /** A traversed screenshot list is not a directory of stable native customer IDs. */
@@ -22,8 +23,8 @@ export async function scanForegroundList(
       next = view.rows
     if (signal.aborted) throw new Error('cancelled')
     if (previous) {
-      const oldKeys = previous.map(rowKey),
-        newKeys = next.map(rowKey)
+      const oldKeys = previous.map(identityKey),
+        newKeys = next.map(identityKey)
       if (hashContext(oldKeys) === hashContext(newKeys)) {
         if (++still === 2) {
           if (!view.atBottom) throw new Error('list_incomplete')
@@ -40,7 +41,7 @@ export async function scanForegroundList(
           }
         }
         if (!overlap) throw new Error('list_changed')
-        rows.push(...next.slice(overlap))
+        rows.splice(rows.length - overlap, overlap, ...next)
       }
     } else rows.push(...next)
     if (rows.length > 10000) throw new Error('list_limit')

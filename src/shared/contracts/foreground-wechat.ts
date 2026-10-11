@@ -20,9 +20,10 @@ export const ForegroundObservationSchema = z.strictObject({
 export const ForegroundRecordSchema = z.strictObject({
   id: z.string().uuid(),
   target: z.string().max(128),
-  question: z.string().max(16384),
+  question: z.string().max(80 * 4096 + 79),
   reply: z.string().max(4096),
-  state: z.enum(['unknown', 'sent', 'not_sent']),
+  state: z.enum(['unknown', 'sent', 'not_sent', 'handoff']),
+  source: ForegroundObservationSchema.optional(),
   failureReason: z.string().max(128).optional(),
   failureStage: z
     .enum(['before_input', 'input', 'draft_validation', 'before_enter', 'receipt'])

@@ -16,6 +16,8 @@ const states: Record<ForegroundStatus['state'], string> = {
   paused: '已暂停'
 }
 const reasons: Record<string, string> = {
+  owner_decision_required: '这条需要本人决定，已保留待处理',
+  media_requires_owner: '这条含图片、语音等内容，需要本人查看；文字消息会继续处理',
   none: '',
   user_pause: '已暂停自动回复。',
   target_required: '请输入联系人备注名。',
@@ -236,7 +238,9 @@ export default function PersonalWechatControls({ active }: { active: boolean }):
                       ? '已确认发送'
                       : row.state === 'unknown'
                         ? '结果待核对'
-                        : '未发送'}
+                        : row.state === 'handoff'
+                          ? '待本人处理'
+                          : '未发送'}
                   </strong>
                   <p>收到：{row.question}</p>
                   <p>回复：{row.reply}</p>

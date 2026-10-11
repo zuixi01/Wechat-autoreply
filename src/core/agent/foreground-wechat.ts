@@ -46,6 +46,7 @@ export interface ForegroundJournal {
   hasUnknown?(): boolean
   unresolved?(): ForegroundRecord[]
   save(record: ForegroundRecord): void
+  complete?(record: ForegroundRecord, checkpoint: ForegroundCheckpoint): void
 }
 export interface ForegroundUnreadHint {
   count: number | null
@@ -102,7 +103,7 @@ export class ForegroundWechatRuntime {
     private readonly polling = true,
     private readonly checkpoint?: (value: ForegroundCheckpoint) => void
   ) {}
-  status(): ForegroundStatus {
+  activity(): Omit<ForegroundStatus, 'records'> {
     return {
       state: this.state,
       target: this.target,
@@ -110,7 +111,12 @@ export class ForegroundWechatRuntime {
       recoveryAttempts: this.recoveryAttempts,
       lastReplyDurationMs: this.lastReplyDurationMs,
       nextRetryAt: this.nextRetryAt,
-      performance: this.driver.metrics?.(),
+      performance: this.driver.metrics?.()
+    }
+  }
+  status(): ForegroundStatus {
+    return {
+      ...this.activity(),
       records: [
         ...(this.journal.unresolved?.() ?? []).slice(0, 50),
         ...this.journal.list(50).slice(-50).reverse()
@@ -202,7 +208,7 @@ export class ForegroundWechatRuntime {
           (count !== null &&
             (!Number.isInteger(count) || count < 1 || count > 80 || messages.length !== count)) ||
           !messages.length ||
-          messages.some((message) => message.direction !== 'inbound') ||
+          messages.some((message) => message.direction === 'outbound') ||
           !prefix ||
           !messages.at(-1)?.text.startsWith(prefix)
         )
@@ -334,8 +340,10 @@ export class ForegroundWechatRuntime {
           }
           return
         }
-        this.journal.save({ ...pending.record, state: 'sent' })
-        this.confirm(pending.observation, pending.record.reply, pending.started)
+        this.confirm(pending.observation, pending.record.reply, pending.started, {
+          ...pending.record,
+          state: 'sent'
+        })
         this.pendingReceipt = undefined
         return
       }
@@ -361,8 +369,37 @@ export class ForegroundWechatRuntime {
         additions = additions.slice(1)
         consumedOwnEcho = true
       }
-      if (additions.some((m) => m.direction === 'outbound')) throw new Error('human_reply')
+      if (additions.some((m) => m.direction === 'outbound')) {
+        const lastHuman = additions.findLastIndex((message) => message.direction === 'outbound')
+        this.baseline = {
+          ...next,
+          messages: next.messages.slice(0, next.messages.length - additions.length + lastHuman + 1)
+        }
+        this.ownEcho = undefined
+        this.ownEchoFingerprint = undefined
+        this.pendingWork = additions
+          .slice(lastHuman + 1)
+          .some((message) => message.direction === 'inbound')
+        this.changed()
+        throw new Error('human_reply')
+      }
       this.driver.accept?.(next)
+      const media = additions.filter(
+        (message) =>
+          message.direction === 'system' && /non-text|图片|语音|视频|表情/.test(message.text)
+      )
+      if (media.length)
+        this.journal.save({
+          id: randomUUID(),
+          target: this.target,
+          question: media.map((message) => message.text).join('\n'),
+          reply: '',
+          state: 'handoff',
+          source: next,
+          failureReason: 'media_requires_owner',
+          createdAt: Date.now()
+        })
+      additions = additions.filter((message) => message.direction === 'inbound')
       if (!additions.some((m) => m.direction === 'inbound' && m.text.trim())) {
         this.baseline = next
         if (consumedOwnEcho) {
@@ -380,6 +417,16 @@ export class ForegroundWechatRuntime {
       const reply = await this.driver.generate(next, signal, additions)
       if (signal.aborted) return
       if (!reply?.trim()) {
+        this.journal.save({
+          id: randomUUID(),
+          target: this.target,
+          question: additions.map((message) => message.text).join('\n'),
+          reply: '',
+          state: 'handoff',
+          source: next,
+          failureReason: 'owner_decision_required',
+          createdAt: Date.now()
+        })
         this.baseline = next
         if (consumedOwnEcho) {
           this.ownEcho = undefined
@@ -408,6 +455,7 @@ export class ForegroundWechatRuntime {
         question: additions.map((m) => m.text).join('\n'),
         reply: reply.trim(),
         state: 'unknown',
+        source: current,
         createdAt: Date.now()
       }
       this.journal.save(record)
@@ -419,7 +467,7 @@ export class ForegroundWechatRuntime {
         /* Unknown never authorizes replay. */
       }
       const failure = outcome === 'sent' ? undefined : this.driver.dispatchFailure?.()
-      this.journal.save({ ...record, state: outcome, ...failure })
+      if (outcome !== 'sent') this.journal.save({ ...record, state: outcome, ...failure })
       if (outcome === 'unknown') {
         if (
           !signal.aborted &&
@@ -459,7 +507,7 @@ export class ForegroundWechatRuntime {
         }
         return
       }
-      this.confirm(next, record.reply, started)
+      this.confirm(next, record.reply, started, { ...record, state: 'sent' })
       // A pause racing a positive receipt must still persist the echo marker;
       // otherwise restart mistakes our own reply for an untracked human reply.
       if (signal.aborted) return
@@ -470,13 +518,28 @@ export class ForegroundWechatRuntime {
       }
     }
   }
-  private confirm(observation: ForegroundObservation, reply: string, started: number): void {
+  private confirm(
+    observation: ForegroundObservation,
+    reply: string,
+    started: number,
+    record?: ForegroundRecord
+  ): void {
     this.baseline = observation
     this.ownEcho = this.driver.receiptText?.() ?? reply
     this.ownEchoFingerprint = this.driver.receiptFingerprint?.()
     this.pendingWork = false
     this.recoveryAttempts = 0
     this.lastReplyDurationMs = Date.now() - started
+    if (record) {
+      const checkpoint = {
+        baseline: this.baseline,
+        ownEcho: this.ownEcho,
+        ownEchoFingerprint: this.ownEchoFingerprint,
+        pending: this.pendingWork
+      }
+      if (this.journal.complete) this.journal.complete(record, checkpoint)
+      else this.journal.save(record)
+    }
     this.changed()
     if (this.controller?.signal.aborted) return
     this.reason = 'none'

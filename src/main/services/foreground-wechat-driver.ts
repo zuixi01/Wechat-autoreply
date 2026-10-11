@@ -564,7 +564,7 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     visual: z.infer<typeof ListVisualSchema>
   ): string {
     return this.fingerprint(pixels, {
-      header: visual.list,
+      header: [visual.input[0], 0, 1 - visual.input[0], 0.15],
       history: visual.list,
       input: visual.input
     } as z.infer<typeof VisualChatSchema>)
