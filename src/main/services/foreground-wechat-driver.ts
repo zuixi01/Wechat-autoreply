@@ -908,6 +908,29 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     }
     return hash.digest('hex')
   }
+  private async settleExactPixels(
+    evidence: Evidence,
+    visual: Pick<z.infer<typeof VisualChatSchema>, 'header' | 'history' | 'input'>,
+    signal: AbortSignal
+  ): Promise<Capture> {
+    const deadline = Date.now() + 4500
+    const expected = this.fingerprint(evidence.capture.pixels, visual)
+    let capture = await this.capture(signal)
+    for (let attempt = 0; attempt < 40 && Date.now() < deadline; attempt++) {
+      if (
+        signal.aborted ||
+        capture.token !== evidence.capture.token ||
+        this.configuration().revision !== evidence.observation.revision ||
+        this.fingerprint(capture.pixels, visual) === expected
+      )
+        break
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) break
+      await wait(Math.min(100, remaining), signal)
+      capture = await this.capture(signal)
+    }
+    return capture
+  }
   private outsideInput(pixels: Capture['pixels'], input: z.infer<typeof area>): string {
     const [x, y, w, h] = input
     const left = Math.floor(x * pixels.width),
@@ -1708,21 +1731,12 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     if (!robot) return failed('desktop_input_unavailable')
     let dispatchStarted = false
     try {
-      let fresh = await this.capture(signal)
-      for (
-        let attempt = 0;
-        attempt < 12 &&
-        fresh.token === evidence.capture.token &&
-        this.fingerprint(fresh.pixels, evidence.visual) !== evidence.fingerprint;
-        attempt++
-      ) {
-        // A blinking caret may alternate during the model request. Wait only
-        // for the EXACT original pixels; never mask or relax a changed draft.
-        await wait(100, signal)
-        fresh = await this.capture(signal)
-      }
+      // Transient animation must return to the EXACT original frame. No mask,
+      // new anchor or relaxed draft comparison is permitted while waiting.
+      const fresh = await this.settleExactPixels(evidence, evidence.visual, signal)
       if (
         fresh.token !== evidence.capture.token ||
+        this.configuration().revision !== observation.revision ||
         this.fingerprint(fresh.pixels, evidence.visual) !== evidence.fingerprint
       ) {
         console.warn('[ForegroundWechat] send_guard:before_input_pixels_changed')
@@ -1762,12 +1776,8 @@ export class ForegroundWechatDriver implements ForegroundDriver {
           console.warn('[ForegroundWechat] send_guard:editor_text_mismatch')
           return failed('send_draft_mismatch')
         }
-        const capture = await this.capture(signal)
-        // Anchor pixels BEFORE the second readback. An edit during that read
-        // either changes the copied text or fails the final pixel check.
-        const verifiedText = await this.windows.readEditorText(capture.window, signal)
-        if (verifiedText !== text) return failed('send_draft_mismatch')
         const stable = { ...evidence.visual, input: evidence.visual.history }
+        const capture = await this.settleExactPixels(evidence, stable, signal)
         if (
           capture.token !== evidence.capture.token ||
           this.configuration().revision !== observation.revision ||
@@ -1815,6 +1825,11 @@ export class ForegroundWechatDriver implements ForegroundDriver {
           }
           return failed('send_context_changed')
         }
+        // Anchor BEFORE this second readback, and only AFTER any settling wait.
+        // An edit during the wait must be read again rather than accepted as
+        // part of a new pixel anchor; edits during copying fail the last check.
+        const verifiedText = await this.windows.readEditorText(capture.window, signal)
+        if (verifiedText !== text) return failed('send_draft_mismatch')
         typed = { ...observation, inputText: readback }
         const visual = { ...evidence.visual, inputText: readback }
         this.evidence = {
@@ -1878,7 +1893,8 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       }
       const ready = this.evidence!
       stage = 'before_enter'
-      for (let attempt = 0; attempt < 13; attempt++) {
+      const enterDeadline = Date.now() + 4500
+      for (let attempt = 0; attempt < 40 && Date.now() < enterDeadline; attempt++) {
         const immediate = await this.current(signal)
         if (hashContext(immediate) !== ready.capture.token) return failed('window_changed')
         // No await between a successful last screen check and Enter. Transient
@@ -1896,7 +1912,8 @@ export class ForegroundWechatDriver implements ForegroundDriver {
           robot.keyTap('enter')
           break
         }
-        if (attempt < 12) await wait(100, signal)
+        const remaining = enterDeadline - Date.now()
+        if (attempt < 39 && remaining > 0) await wait(Math.min(100, remaining), signal)
       }
       if (!dispatchStarted) {
         console.warn('[ForegroundWechat] send_guard:before_enter_pixels_changed')
@@ -1960,19 +1977,10 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       )
         throw new Error('send_context_invalid')
       const asset = await store.load(part.assetId)
-      let before = await this.capture(signal)
-      for (
-        let attempt = 0;
-        attempt < 12 &&
-        before.token === evidence.capture.token &&
-        this.fingerprint(before.pixels, evidence.visual) !== evidence.fingerprint;
-        attempt++
-      ) {
-        await wait(100, signal)
-        before = await this.capture(signal)
-      }
+      const before = await this.settleExactPixels(evidence, evidence.visual, signal)
       if (
         before.token !== evidence.capture.token ||
+        this.configuration().revision !== observation.revision ||
         this.fingerprint(before.pixels, evidence.visual) !== evidence.fingerprint
       )
         throw new Error('send_screen_changed')
@@ -1992,7 +2000,8 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       stage = 'input'
       await this.windows.pasteImage(await this.current(signal), asset.dib, signal)
       stage = 'draft_validation'
-      const draft = await this.capture(signal)
+      const context = { ...evidence.visual, input: evidence.visual.history }
+      const draft = await this.settleExactPixels(evidence, context, signal)
       const result = z
         .strictObject({
           contact: z.string(),
@@ -2019,7 +2028,6 @@ export class ForegroundWechatDriver implements ForegroundDriver {
         result.overlay
       )
         throw new Error('send_image_draft_unverified')
-      const context = { ...evidence.visual, input: evidence.visual.history }
       let draftVisual = evidence.visual
       if (
         this.fingerprint(draft.pixels, context) !==
@@ -2054,18 +2062,35 @@ export class ForegroundWechatDriver implements ForegroundDriver {
           reanchored.revision !== observation.revision ||
           !count ||
           count > observation.messages.length ||
-          !(await this.verifyReceiptHistory(observation, reanchored, count, evidence, signal)) ||
-          this.fingerprint(draft.pixels, stable) !==
-            this.fingerprint(current.capture.pixels, stable)
+          !(await this.verifyReceiptHistory(observation, reanchored, count, evidence, signal))
         )
           throw new Error('send_context_changed')
+        if (
+          this.fingerprint(draft.pixels, stable) !==
+          this.fingerprint(current.capture.pixels, stable)
+        ) {
+          // The expanded editor has its own verified draft frame. Wait only
+          // for that exact context; never replace the image draft anchor.
+          const restored = await this.settleExactPixels(
+            { ...evidence, capture: draft },
+            stable,
+            signal
+          )
+          if (
+            restored.token !== draft.token ||
+            this.configuration().revision !== observation.revision ||
+            this.fingerprint(restored.pixels, stable) !== this.fingerprint(draft.pixels, stable)
+          )
+            throw new Error('send_context_changed')
+        }
         draftVisual = current.visual
       }
       stage = 'before_enter'
       const robot = getRobot(),
         fingerprint = this.fingerprint(draft.pixels, draftVisual)
       let stableDraft = false
-      for (let attempt = 0; attempt < 13; attempt++) {
+      const enterDeadline = Date.now() + 4500
+      for (let attempt = 0; attempt < 40 && Date.now() < enterDeadline; attempt++) {
         const ready = await this.current(signal)
         if (
           !robot ||
@@ -2080,7 +2105,8 @@ export class ForegroundWechatDriver implements ForegroundDriver {
           stableDraft = true
           break
         }
-        if (attempt < 12) await wait(100, signal)
+        const remaining = enterDeadline - Date.now()
+        if (attempt < 39 && remaining > 0) await wait(Math.min(100, remaining), signal)
       }
       if (!stableDraft) throw new Error('send_screen_changed')
       const historyArea = evidence.visual.history

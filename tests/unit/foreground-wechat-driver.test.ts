@@ -667,9 +667,107 @@ describe('project foreground sender boundaries', () => {
     ).toBe('not_sent')
     expect(f.tap).not.toHaveBeenCalled()
   })
-  it.each([false, true])(
-    'reanchors an expanded image editor and rejects intervening new input: %s',
-    async (newInput) => {
+  it.each(['before_input', 'paste', 'before_enter', 'persistent', 'rules', 'window', 'cancel'])(
+    'retains image draft checks while exact pixels settle: %s',
+    async (mode) => {
+      const png = await new Jimp({ width: 32, height: 32, color: 0xffcc00ff }).getBuffer(
+        'image/png'
+      )
+      const signalController = controller(),
+        signal = signalController.signal
+      const transient = () => {
+        const original = Buffer.from(f.png)
+        changeScreen()
+        if (mode !== 'persistent')
+          setTimeout(() => {
+            f.png = original
+          }, 1400)
+        if (mode === 'rules')
+          setTimeout(() => {
+            f.revision = 'rules-2'
+          }, 150)
+        if (mode === 'window')
+          setTimeout(() => {
+            f.active = 99
+          }, 150)
+        if (mode === 'cancel')
+          setTimeout(() => {
+            signalController.abort()
+          }, 150)
+      }
+      const pasteImage = vi.fn(async () => {
+        changeScreen(400, 470)
+        if (['paste', 'persistent', 'rules', 'window', 'cancel'].includes(mode)) transient()
+      })
+      const driver = new ForegroundWechatDriver(
+        () => ({
+          vision: model,
+          reply: model,
+          rules: '回复',
+          revision: f.revision,
+          stickerStore: {
+            load: async () => ({ png, dib: Buffer.alloc(44) }),
+            sent: vi.fn()
+          } as unknown as PersonalStickerStore
+        }),
+        { ...windows, pasteImage }
+      )
+      await advance(driver.connect('Q', signal, 'current_chat'))
+      f.fetch.mockResolvedValueOnce(response(visual()))
+      const before = await advance(driver.read(signal))
+      if (mode === 'before_input') transient()
+      f.fetch
+        .mockImplementationOnce(async () => {
+          if (mode === 'before_enter') transient()
+          return response({
+            contact: 'Q',
+            privateChat: true,
+            matchingDraft: true,
+            draftImageCount: 1,
+            draftTextEmpty: true,
+            overlay: false
+          })
+        })
+        .mockResolvedValueOnce(
+          response(
+            visual('', [
+              { direction: 'inbound', text: '问题' },
+              { direction: 'system', text: '[非文本消息]' }
+            ])
+          )
+        )
+        .mockResolvedValueOnce(
+          response({
+            contact: 'Q',
+            privateChat: true,
+            latestOutboundMatches: true,
+            newOutboundMatches: true,
+            editorEmpty: true,
+            outboundImageCount: 1
+          })
+        )
+      const succeeds = ['before_input', 'paste', 'before_enter'].includes(mode)
+      expect(
+        await advance(
+          driver.dispatchImage(
+            before,
+            { kind: 'image', assetId: '00000000-0000-4000-8000-000000000001' },
+            signal
+          )
+        )
+      ).toBe(succeeds ? 'sent' : 'not_sent')
+      expect(pasteImage).toHaveBeenCalledTimes(mode === 'before_input' && !succeeds ? 0 : 1)
+      expect(f.tap.mock.calls).toEqual(succeeds ? [['enter']] : [])
+    }
+  )
+  it.each([
+    { newInput: false, animation: false },
+    { newInput: true, animation: false },
+    { newInput: false, animation: true },
+    { newInput: true, animation: true }
+  ])(
+    'reanchors an expanded image editor and rejects intervening new input: %j',
+    async ({ newInput, animation }) => {
       const png = await new Jimp({ width: 32, height: 32, color: 0xffcc00ff }).getBuffer(
         'image/png'
       )
@@ -705,8 +803,15 @@ describe('project foreground sender boundaries', () => {
       f.fetch.mockResolvedValueOnce(response(visual()))
       const before = await advance(driver.read(signal))
       f.fetch
-        .mockResolvedValueOnce(
-          response({
+        .mockImplementationOnce(async () => {
+          if (animation) {
+            const originalDraft = Buffer.from(f.png)
+            changeScreen()
+            setTimeout(() => {
+              f.png = originalDraft
+            }, 1400)
+          }
+          return response({
             contact: 'Q',
             privateChat: true,
             matchingDraft: true,
@@ -714,7 +819,7 @@ describe('project foreground sender boundaries', () => {
             draftTextEmpty: true,
             overlay: false
           })
-        )
+        })
         .mockResolvedValueOnce(
           response({
             ...visual(
@@ -872,6 +977,139 @@ describe('project foreground sender boundaries', () => {
     expect(f.readEditor).toHaveBeenCalledTimes(2)
     expect(f.tap.mock.calls).toEqual([['enter']])
   })
+  it('waits for exact context pixels after paste before the second native readback', async () => {
+    const t = await connected(),
+      text = '测试回复'
+    let pastedAt = 0
+    f.type.mockImplementationOnce(() => {
+      pastedAt = Date.now()
+      const typedFrame = Buffer.from(f.png)
+      changeScreen()
+      setTimeout(() => {
+        f.png = typedFrame
+      }, 1400)
+      return text
+    })
+    f.readEditor.mockImplementationOnce(async () => {
+      expect(Date.now() - pastedAt).toBeGreaterThanOrEqual(200)
+      return text
+    })
+    f.fetch.mockResolvedValueOnce(
+      response(
+        visual('', [
+          { direction: 'inbound', text: '问题' },
+          { direction: 'outbound', text }
+        ])
+      )
+    )
+    expect(await advance(t.driver.dispatch(t.observation, text, t.signal))).toBe('sent')
+    expect(f.type).toHaveBeenCalledTimes(1)
+    expect(f.tap.mock.calls.filter(([key]) => key === 'enter')).toHaveLength(1)
+  })
+  it('rejects a human draft edited while waiting for the exact paste context', async () => {
+    const t = await connected(),
+      text = '测试回复'
+    f.type.mockImplementationOnce(() => {
+      const typedFrame = Buffer.from(f.png)
+      changeScreen()
+      setTimeout(() => {
+        f.png = typedFrame
+        changeScreen(500, 480)
+      }, 200)
+      return text
+    })
+    f.readEditor.mockResolvedValueOnce('本人修改了草稿')
+    expect(await advance(t.driver.dispatch(t.observation, text, t.signal))).toBe('not_sent')
+    expect(f.readEditor).toHaveBeenCalledTimes(1)
+    expect(f.tap).not.toHaveBeenCalled()
+  })
+  it('cancels the exact paste-context wait without sending or typing again', async () => {
+    const t = await connected(),
+      ctl = controller(),
+      text = '测试回复'
+    f.type.mockImplementationOnce(() => {
+      changeScreen()
+      setTimeout(() => ctl.abort(), 150)
+      return text
+    })
+    expect(await advance(t.driver.dispatch(t.observation, text, ctl.signal))).toBe('not_sent')
+    expect(f.type).toHaveBeenCalledTimes(1)
+    expect(f.tap).not.toHaveBeenCalled()
+  })
+  it.each(['before_input', 'before_enter'])(
+    'recovers exact transient pixels at %s without duplicate input',
+    async (stage) => {
+      const t = await connected(),
+        text = '测试回复'
+      const transient = () => {
+        const original = Buffer.from(f.png)
+        changeScreen()
+        setTimeout(() => {
+          f.png = original
+        }, 1400)
+      }
+      if (stage === 'before_input') transient()
+      f.type.mockReturnValueOnce(text)
+      f.readEditor.mockImplementationOnce(async () => {
+        if (stage === 'before_enter') transient()
+        return text
+      })
+      f.fetch.mockResolvedValueOnce(
+        response(
+          visual('', [
+            { direction: 'inbound', text: '问题' },
+            { direction: 'outbound', text }
+          ])
+        )
+      )
+      expect(await advance(t.driver.dispatch(t.observation, text, t.signal))).toBe('sent')
+      expect(f.type).toHaveBeenCalledTimes(1)
+      expect(f.tap.mock.calls.filter(([key]) => key === 'enter')).toHaveLength(1)
+    }
+  )
+  it('bounds a persistent paste-context change and never reads or sends its draft', async () => {
+    const t = await connected(),
+      text = '测试回复'
+    let pastedAt = 0,
+      inspections = 0
+    f.type.mockImplementationOnce(() => {
+      pastedAt = Date.now()
+      f.inspectEffect = () => {
+        inspections++
+      }
+      changeScreen()
+      return text
+    })
+    expect(await advance(t.driver.dispatch(t.observation, text, t.signal))).toBe('not_sent')
+    expect(Date.now() - pastedAt).toBeLessThanOrEqual(4500)
+    expect(inspections).toBeLessThanOrEqual(82)
+    expect(t.driver.dispatchFailure()).toMatchObject({
+      failureStage: 'draft_validation',
+      failureReason: 'send_context_changed'
+    })
+    expect(f.type).toHaveBeenCalledTimes(1)
+    expect(f.readEditor).not.toHaveBeenCalled()
+    expect(f.tap).not.toHaveBeenCalled()
+  })
+  it.each(['rules', 'window'])(
+    'stops an exact paste-context wait after %s changes',
+    async (change) => {
+      const t = await connected(),
+        text = '测试回复'
+      f.type.mockImplementationOnce(() => {
+        changeScreen()
+        setTimeout(() => {
+          if (change === 'rules') f.revision = 'rules-2'
+          else f.active = 99
+        }, 150)
+        return text
+      })
+      expect(await advance(t.driver.dispatch(t.observation, text, t.signal))).toBe('not_sent')
+      expect(f.type).toHaveBeenCalledTimes(1)
+      expect(f.readEditor).not.toHaveBeenCalled()
+      expect(f.tap).not.toHaveBeenCalled()
+    }
+  )
   it('blocks a dropped supplementary character before Enter and records the actual failure', async () => {
     const t = await connected()
     f.type.mockReturnValueOnce('你好呀。')
