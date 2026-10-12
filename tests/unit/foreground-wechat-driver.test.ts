@@ -1305,7 +1305,10 @@ describe('project foreground sender boundaries', () => {
     f.fetch.mockResolvedValueOnce(response('not-json')).mockResolvedValueOnce(response(visual()))
     expect((await t.driver.read(t.signal)).contact).toBe('Q')
     const request = JSON.parse(f.fetch.mock.calls.at(-1)![1].body)
-    expect(request.response_format).toEqual({ type: 'json_object' })
+    expect(request.response_format).toMatchObject({
+      type: 'json_schema',
+      json_schema: { strict: true }
+    })
     expect(f.type).not.toHaveBeenCalled()
     expect(f.tap).not.toHaveBeenCalled()
   })
