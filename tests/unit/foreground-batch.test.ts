@@ -124,6 +124,91 @@ function fixture(count = 15, persisted?: SqliteForegroundJournal) {
   }
 }
 describe('foreground batch scanning and processing', () => {
+  it('refreshes for a later message from another contact while pre-input timeouts continue', async () => {
+    vi.useFakeTimers()
+    const f = fixture(2)
+    const runtime = new ForegroundBatchRuntime(
+      f.navigator,
+      (target) => {
+        const driver = f.factory(target)
+        if (target === '客户0') {
+          driver.dispatch = vi.fn(async () => {
+            vi.setSystemTime(Date.now() + 90000)
+            return 'not_sent'
+          })
+          driver.dispatchFailure = () => ({
+            failureStage: 'before_input',
+            failureReason: 'model_timeout'
+          })
+        }
+        return driver
+      },
+      f.journal,
+      false
+    )
+    try {
+      await runtime.start(['客户0', '客户1'])
+      for (
+        let i = 0;
+        i < 6 && !f.records.some((r) => r.target === '客户1' && r.state === 'sent');
+        i++
+      )
+        await runtime.tick()
+      expect(f.records.filter((r) => r.target === '客户1' && r.state === 'sent')).toHaveLength(1)
+      f.rows[1].unread = 1
+      f.rows[1].preview = '稍后发来的问题'
+      f.observations.get('客户1')!.messages.push({ direction: 'inbound', text: '稍后发来的问题' })
+      vi.setSystemTime(Date.now() + 31000)
+      await runtime.tick()
+      expect(runtime.status().pending).toBe(2)
+      for (let i = 0; i < 4; i++) await runtime.tick()
+      expect(
+        f.records.filter((r) => r.target === '客户1' && r.state === 'sent').map((r) => r.question)
+      ).toEqual(['问题1', '稍后发来的问题'])
+      expect(f.records.filter((r) => r.target === '客户0' && r.state === 'sent')).toHaveLength(0)
+      expect(f.maxSending()).toBe(1)
+    } finally {
+      await runtime.pause()
+      vi.useRealTimers()
+    }
+  })
+  it('lets another contact reply while a proven pre-input timeout waits for recovery', async () => {
+    const f = fixture(2)
+    let available = false
+    const runtime = new ForegroundBatchRuntime(
+      f.navigator,
+      (target) => {
+        const driver = f.factory(target)
+        if (target === '客户0') {
+          const send = driver.dispatch
+          driver.dispatch = vi.fn(async (...args) => (available ? send(...args) : 'not_sent'))
+          driver.dispatchFailure = () => ({
+            failureStage: 'before_input',
+            failureReason: 'model_timeout'
+          })
+        }
+        return driver
+      },
+      f.journal,
+      false
+    )
+    try {
+      await runtime.start(['客户0', '客户1'])
+      for (let i = 0; i < 10; i++) await runtime.tick()
+      expect(
+        f.records.filter((r) => r.target === '客户0' && r.state === 'not_sent').length
+      ).toBeGreaterThan(0)
+      expect(f.records.filter((r) => r.target === '客户1' && r.state === 'sent')).toHaveLength(1)
+      available = true
+      for (let i = 0; i < 15; i++) await runtime.tick()
+      expect(f.records.filter((r) => r.target === '客户0' && r.state === 'sent')).toHaveLength(1)
+      expect(f.records.filter((r) => r.target === '客户1' && r.state === 'sent')).toHaveLength(1)
+      expect(f.maxSending()).toBe(1)
+      expect(runtime.status().issues).toEqual([])
+    } finally {
+      await runtime.pause()
+    }
+  })
   it('does not treat a failed initial connection as a verified unread boundary', async () => {
     const db = new SqliteForegroundJournal(':memory:'),
       f = fixture(1, db)

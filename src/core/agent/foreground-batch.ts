@@ -233,8 +233,17 @@ export class ForegroundBatchRuntime {
         allTargetsQueued &&
         Date.now() - this.lastScanAt < 30000 &&
         [...this.sessions.values()].some((session) => session.activity().state === 'generating')
+      // Eight slow recovery turns can hide another contact's later message for
+      // minutes. Refresh after 30s when only one recovering job remains. Once
+      // another job is discovered, preserve rotation so a slow first job cannot
+      // repeatedly rebuild the directory order and starve that contact again.
+      const refreshLoneRecovery =
+        this.queue.length === 1 &&
+        !allTargetsQueued &&
+        this.sessions.get(this.queue[0].name)?.activity().state === 'recovering' &&
+        Date.now() - this.lastScanAt >= 30000
       if (
-        this.queueTurns >= 8 &&
+        (this.queueTurns >= 8 || refreshLoneRecovery) &&
         !awaitQueuedModels &&
         this.queue.every((row) => this.sessions.has(row.name)) &&
         ![...this.sessions.values()].some(

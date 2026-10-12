@@ -318,6 +318,59 @@ describe('project-owned foreground WeChat runtime', () => {
     ])
     await f.runtime.pause()
   })
+  it.each([
+    'model_timeout',
+    'model_network_failed',
+    'model_busy',
+    'visual_response_invalid',
+    'capture_failed',
+    'window_query_failed',
+    'wechat_window_unavailable'
+  ])(
+    'recovers a proven pre-input failure without losing or duplicating its pending question: %s',
+    async (reason) => {
+      const f = fixture()
+      await f.runtime.start('Q')
+      f.set(observation([msg('历史消息'), msg('等待接口恢复的问题')]))
+      f.driver.dispatchFailure = vi.fn(() => ({
+        failureReason: reason,
+        failureStage: 'before_input' as const
+      }))
+      vi.mocked(f.driver.dispatch).mockResolvedValue('not_sent')
+      for (let attempt = 0; attempt < 9; attempt++) {
+        await f.runtime.tick()
+        expect(f.runtime.status()).toMatchObject({ state: 'recovering', reason })
+        expect(f.records.every((r) => r.state === 'not_sent')).toBe(true)
+      }
+      expect(f.runtime.status().recoveryAttempts).toBe(6)
+      vi.mocked(f.driver.dispatch).mockResolvedValue('sent')
+      await f.runtime.tick()
+      await f.runtime.tick()
+      expect(f.records.filter((r) => r.state === 'sent')).toHaveLength(1)
+      expect(f.records.filter((r) => r.state === 'sent')[0].question).toBe('等待接口恢复的问题')
+      expect(f.driver.dispatch).toHaveBeenCalledTimes(10)
+      expect(f.runtime.status()).toMatchObject({ state: 'running', recoveryAttempts: 0 })
+      await f.runtime.pause()
+    }
+  )
+  it.each(['input', 'draft_validation', 'before_enter', 'receipt'] as const)(
+    'never replays a timeout after input may have started at %s',
+    async (stage) => {
+      const f = fixture()
+      await f.runtime.start('Q')
+      f.set(observation([msg('历史消息'), msg('不能重发的问题')]))
+      f.driver.dispatchFailure = vi.fn(() => ({
+        failureReason: 'model_timeout',
+        failureStage: stage
+      }))
+      vi.mocked(f.driver.dispatch).mockResolvedValue('not_sent')
+      await f.runtime.tick()
+      await f.runtime.tick()
+      expect(f.runtime.status()).toMatchObject({ state: 'paused', reason: 'model_timeout' })
+      expect(f.driver.dispatch).toHaveBeenCalledTimes(1)
+      await f.runtime.pause()
+    }
+  )
   it('preserves input-stage failure details and never repeats input automatically', async () => {
     const f = fixture()
     await f.runtime.start('Q')

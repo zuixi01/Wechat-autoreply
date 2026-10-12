@@ -704,9 +704,14 @@ export class ForegroundWechatRuntime {
         if (!signal.aborted) {
           if (
             failure?.failureStage === 'before_input' &&
-            failure.failureReason === 'screen_obscured'
+            (failure.failureReason === 'screen_obscured' ||
+              (transient.has(failure.failureReason ?? '') &&
+                failure.failureReason !== 'message_gap'))
           ) {
-            this.recover(new Error('screen_obscured'))
+            // A proven not_sent failure BEFORE input has no draft or send to
+            // replay. Retain the pending question and use normal validation;
+            // later stages and unknown outcomes must never take this path.
+            this.recover(new Error(failure.failureReason))
             return
           }
           if (
