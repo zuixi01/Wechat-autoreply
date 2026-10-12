@@ -54,6 +54,135 @@ function fixture(polling = false) {
   }
 }
 describe('project-owned foreground WeChat runtime', () => {
+  it('uses an independently proved media prefix without consuming later incoming', async () => {
+    const f = fixture()
+    const media = (c: string) => ({
+      direction: 'system' as const,
+      text: '[非文本消息]',
+      pixelFingerprint: c.repeat(64)
+    })
+    f.set(observation([msg('已处理'), media('a')]))
+    await f.runtime.start('Q', 'current_chat')
+    f.driver.reconcileHistory = async (_before, next) => ({
+      ...next,
+      messages: next.messages.slice(0, -1)
+    })
+    f.set(observation([msg('已处理'), media('b'), msg('新问题')]))
+    await f.runtime.tick()
+    expect(f.records.filter((r) => r.state === 'sent').map((r) => r.question)).toEqual(['新问题'])
+    const saved = f.checkpoint.mock.calls.at(-1)![0]
+    expect(saved.baseline.messages[1].pixelFingerprint).toBe('b'.repeat(64))
+    f.set(observation([...saved.baseline.messages, msg('你好，已收到', 'outbound')]))
+    await f.runtime.tick()
+    expect(f.driver.dispatch).toHaveBeenCalledTimes(1)
+    await f.runtime.pause()
+  })
+  it('does not save a media reanchor completed after pause', async () => {
+    const f = fixture()
+    const media = (c: string) => ({
+      direction: 'system' as const,
+      text: '[非文本消息]',
+      pixelFingerprint: c.repeat(64)
+    })
+    f.set(observation([msg('已处理'), media('a')]))
+    await f.runtime.start('Q', 'current_chat')
+    let release!: () => void
+    let entered!: () => void
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    f.driver.reconcileHistory = async (_before, next) => {
+      entered()
+      await gate
+      return { ...next, messages: next.messages.slice(0, 2) }
+    }
+    f.set(observation([msg('已处理'), media('b'), msg('新问题')]))
+    const tick = f.runtime.tick()
+    await ready
+    const paused = f.runtime.pause()
+    release()
+    await Promise.all([tick, paused])
+    expect(f.driver.dispatch).not.toHaveBeenCalled()
+    expect(f.checkpoint.mock.calls.at(-1)![0].baseline.messages[1].pixelFingerprint).toBe(
+      'a'.repeat(64)
+    )
+  })
+  it.each(['verified', 'duplicate', 'old-pixels', 'wrong-text', 'no-pixels'] as const)(
+    'refuses a media gap even when an old page contains an identical confirmed echo: %s',
+    async (mode) => {
+      const f = fixture()
+      const fp = 'e'.repeat(64)
+      const baseline = observation([
+        {
+          direction: 'system',
+          text: '[非文本消息]',
+          pixelFingerprint: mode === 'old-pixels' ? fp : 'a'.repeat(64)
+        }
+      ])
+      const echo = {
+        ...msg(mode === 'wrong-text' ? '另一条' : '已回复', 'outbound'),
+        pixelFingerprint: fp
+      }
+      f.set(
+        observation([
+          { direction: 'system', text: '[非文本消息]', pixelFingerprint: 'b'.repeat(64) },
+          echo,
+          ...(mode === 'duplicate' ? [echo] : []),
+          msg('接着问你')
+        ])
+      )
+      await f.runtime.start('Q', 'current_chat', undefined, {
+        baseline,
+        ownEcho: '已回复',
+        ownEchoFingerprint: mode === 'no-pixels' ? undefined : fp,
+        pending: false
+      })
+      await f.runtime.tick()
+      expect(f.records.filter((r) => r.state === 'sent')).toEqual([])
+      await f.runtime.tick()
+      expect(f.driver.dispatch).not.toHaveBeenCalled()
+      await f.runtime.pause()
+    }
+  )
+  it('persists verified receipt history and continues after new incoming and restart without replay', async () => {
+    const f = fixture()
+    const media = (c: string) => ({
+      direction: 'system' as const,
+      text: '[非文本消息]',
+      pixelFingerprint: c.repeat(64)
+    })
+    const old = observation([msg('旧文字'), media('a'), media('b'), media('c')])
+    const question = observation([...old.messages, msg('第一条')])
+    const verified = observation([media('d'), media('e'), media('f'), msg('第一条')])
+    f.driver.receiptBaseline = () => verified
+    f.set(old)
+    await f.runtime.start('Q', 'current_chat')
+    f.set(question)
+    await f.runtime.tick()
+    const saved = f.checkpoint.mock.calls.at(-1)![0]
+    expect(saved.baseline.messages).toEqual(verified.messages)
+    await f.runtime.pause()
+    const resumed = new ForegroundWechatRuntime(
+      f.driver,
+      { list: () => f.records, save: (row) => f.records.push(row) },
+      false
+    )
+    const next = observation([...verified.messages, msg('你好，已收到', 'outbound'), msg('第二条')])
+    f.driver.receiptBaseline = () => undefined
+    f.set(next)
+    await resumed.start('Q', 'current_chat', undefined, saved)
+    await resumed.tick()
+    await resumed.tick()
+    expect(f.records.filter((r) => r.state === 'sent').map((r) => r.question)).toEqual([
+      '第一条',
+      '第二条'
+    ])
+    expect(f.driver.dispatch).toHaveBeenCalledTimes(2)
+    await resumed.pause()
+  })
   it('refuses an unproven boundary between different verified media pixels', async () => {
     const f = fixture()
     const media = (pixelFingerprint: string) => ({

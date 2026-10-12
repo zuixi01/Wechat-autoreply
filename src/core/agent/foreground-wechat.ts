@@ -34,6 +34,12 @@ export interface ForegroundDriver {
   accept?(observation: ForegroundObservation): void
   receiptText?(): string | undefined
   receiptFingerprint?(): string | undefined
+  receiptBaseline?(): ForegroundObservation | undefined
+  reconcileHistory?(
+    baseline: ForegroundObservation,
+    next: ForegroundObservation,
+    signal: AbortSignal
+  ): Promise<ForegroundObservation | undefined>
   seed?(messages: ForegroundObservation['messages']): void
   connect(
     target: string,
@@ -385,6 +391,39 @@ export class ForegroundWechatRuntime {
     }
     throw new Error('message_gap')
   }
+  private async additionsWithProof(
+    next: ForegroundObservation,
+    signal: AbortSignal
+  ): Promise<ForegroundObservation['messages']> {
+    try {
+      return this.additions(next)
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        error.message !== 'message_gap' ||
+        !this.driver.reconcileHistory
+      )
+        throw error
+      const old = this.baseline!
+      const result = await this.driver.reconcileHistory(old, next, signal)
+      if (signal.aborted) throw new Error('cancelled')
+      if (!result) throw error
+      const proved = ForegroundObservationSchema.parse(result)
+      this.validate(proved)
+      if (
+        !proved.messages.length ||
+        proved.messages.length > old.messages.length ||
+        hashContext(proved.messages) !== hashContext(next.messages.slice(0, proved.messages.length))
+      )
+        throw error
+      this.baseline = proved
+      const additions = this.additions(next)
+      this.pendingWork =
+        this.pendingWork || additions.some((message) => message.direction === 'inbound')
+      this.changed()
+      return additions
+    }
+  }
   private async draft(
     next: ForegroundObservation,
     incoming: ForegroundObservation['messages'],
@@ -427,8 +466,8 @@ export class ForegroundWechatRuntime {
     return job.result ?? null
   }
   private async cycle(): Promise<void> {
-    const controller = this.controller,
-      baseline = this.baseline
+    const controller = this.controller
+    let baseline = this.baseline
     if (
       !['running', 'waiting_foreground', 'waiting_owner', 'recovering', 'generating'].includes(
         this.state
@@ -477,7 +516,8 @@ export class ForegroundWechatRuntime {
       )
       if (signal.aborted) return
       this.validate(next)
-      let additions = this.additions(next)
+      let additions = await this.additionsWithProof(next, signal)
+      baseline = this.baseline!
       this.state = 'running'
       this.reason = 'none'
       this.nextRetryAt = undefined
@@ -700,7 +740,7 @@ export class ForegroundWechatRuntime {
     started: number,
     record?: ForegroundRecord
   ): void {
-    this.baseline = observation
+    this.baseline = this.driver.receiptBaseline?.() ?? observation
     this.ownEcho = this.driver.receiptText?.() ?? reply
     this.ownEchoFingerprint = this.driver.receiptFingerprint?.()
     if (this.delivery) {

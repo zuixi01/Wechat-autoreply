@@ -345,6 +345,64 @@ describe('project foreground sender boundaries', () => {
     expect(rejected).toBe(1)
     expect(f.fetch).toHaveBeenCalledTimes(3)
   })
+  it('negotiates a provider that echoes the requested schema instead of reading the screenshot', async () => {
+    const t = await connected()
+    let echoed = 0
+    f.fetch.mockImplementation(async (_url, request) => {
+      const body = JSON.parse(request.body)
+      if (body.response_format?.type === 'json_schema') {
+        echoed++
+        return response([body.response_format.json_schema.schema])
+      }
+      return response(visual())
+    })
+    expect((await advance(t.driver.read(t.signal, true))).contact).toBe('Q')
+    changeScreen()
+    expect((await advance(t.driver.read(t.signal, true))).contact).toBe('Q')
+    expect(echoed).toBe(1)
+    expect(f.type).not.toHaveBeenCalled()
+  })
+  it('negotiates an empty structured array once and still rejects an invalid fallback', async () => {
+    const t = await connected()
+    let structured = 0
+    f.fetch.mockImplementation(async (_url, request) => {
+      const body = JSON.parse(request.body)
+      if (body.response_format?.type === 'json_schema') {
+        structured++
+        return response([])
+      }
+      return response(visual())
+    })
+    expect((await advance(t.driver.read(t.signal, true))).contact).toBe('Q')
+    changeScreen()
+    expect((await advance(t.driver.read(t.signal, true))).contact).toBe('Q')
+    expect(structured).toBe(1)
+    f.fetch.mockResolvedValue(response([]))
+    changeScreen()
+    await expect(advance(t.driver.read(t.signal, true))).rejects.toThrow()
+    expect(structured).toBe(1)
+    expect(f.type).not.toHaveBeenCalled()
+    expect(f.tap).not.toHaveBeenCalled()
+  })
+  it('generates a reply without spending the entire token budget on hidden reasoning', async () => {
+    const t = await connected()
+    f.fetch.mockImplementation(async (_url, request) =>
+      JSON.parse(request.body).reasoning_effort === 'none'
+        ? response('嗯我在')
+        : {
+            ok: true,
+            json: async () => ({
+              choices: [{ finish_reason: 'length', message: {} }],
+              usage: {
+                completion_tokens: 512,
+                completion_tokens_details: { reasoning_tokens: 512 }
+              }
+            })
+          }
+    )
+    expect(await advance(t.driver.generate(t.observation, t.signal))).toBe('嗯我在')
+    expect(f.type).not.toHaveBeenCalled()
+  })
   it('reads screenshots without a provider default reasoning delay', async () => {
     const driver = new ForegroundWechatDriver(
       () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
@@ -1168,6 +1226,249 @@ describe('project foreground sender boundaries', () => {
     expect(receipts).toBe(2)
     expect(f.type).toHaveBeenCalledTimes(1)
     expect(f.tap.mock.calls).toEqual([['enter']])
+  })
+  it('unwraps a single vision object while still rejecting ambiguous or malformed arrays', async () => {
+    const t = await connected()
+    f.fetch.mockResolvedValue(response([visual()]))
+    expect((await advance(t.driver.read(t.signal, true))).messages[0].text).toBe('问题')
+    for (const invalid of [
+      [],
+      [visual(), visual()],
+      [null],
+      [[visual()]],
+      [{ ...visual(), privateChat: 'yes' }]
+    ]) {
+      f.fetch.mockResolvedValue(response(invalid))
+      await expect(advance(t.driver.read(t.signal, true))).rejects.toThrow()
+    }
+  })
+  it.each([
+    'same',
+    'replaced',
+    'no-anchor',
+    'reordered',
+    'incomplete',
+    'truncated',
+    'unitless',
+    'blank'
+  ] as const)('requires anchored independent file-card proof after scroll: %s', async (mode) => {
+    const t = await connected()
+    const prior = t.driver['evidence']!
+    const anchor = {
+      direction: 'inbound' as const,
+      text: '今晚吃什么',
+      pixelFingerprint: 'a'.repeat(64)
+    }
+    const media = (fp: string) => ({
+      direction: 'system' as const,
+      text: '[非文本消息]',
+      pixelFingerprint: fp.repeat(64)
+    })
+    const before = { ...t.observation, messages: [anchor, media('b'), media('c'), media('d')] }
+    const after: typeof t.observation = {
+      ...t.observation,
+      messages: [
+        mode === 'no-anchor' ? { ...anchor, pixelFingerprint: 'f'.repeat(64) } : anchor,
+        media('e'),
+        media('6'),
+        media('7'),
+        { direction: 'outbound' as const, text: '你先说' }
+      ]
+    }
+    const bubble = {
+      direction: 'inbound' as const,
+      x: 400,
+      y: 180,
+      width: 140,
+      height: 44,
+      fingerprint: 'a'.repeat(64)
+    }
+    prior.bubbles = before.messages.map((m) => ({ ...bubble, fingerprint: m.pixelFingerprint! }))
+    t.driver['evidence'] = {
+      ...prior,
+      observation: after,
+      bubbles: after.messages.map((m) => ({
+        ...bubble,
+        direction: m.direction === 'outbound' ? 'outbound' : 'inbound',
+        fingerprint: m.pixelFingerprint ?? '8'.repeat(64)
+      }))
+    }
+    const files = [
+      { kind: 'file', name: '资料汇总.html', size: '8.6K' },
+      { kind: 'file', name: '资料汇总.html', size: '25.2M' },
+      { kind: 'file', name: 'images.zip', size: '18.1M' }
+    ]
+    if (mode === 'truncated') files[0].name = '资料汇总…html'
+    if (mode === 'unitless') files[0].size = '25'
+    if (mode === 'blank') files[0].name = ' '
+    const pairs = files.map((file, i) => ({
+      index: i + 1,
+      before: file,
+      after: mode === 'replaced' && i === 2 ? { ...file, name: 'different.zip' } : file
+    }))
+    if (mode === 'reordered') pairs.reverse()
+    if (mode === 'incomplete') pairs.pop()
+    f.fetch.mockResolvedValue(response({ pairs }))
+    expect(await t.driver['verifyReceiptHistory'](before, after, 4, prior, t.signal)).toBe(
+      mode === 'same'
+    )
+    expect(f.type).not.toHaveBeenCalled()
+    expect(f.tap).not.toHaveBeenCalled()
+  })
+  it.each(['same', 'replaced'] as const)(
+    'verifies scrolled file cards in an image receipt: %s',
+    async (mode) => {
+      const t = await connected()
+      const prior = t.driver['evidence']!
+      const anchor = {
+        direction: 'inbound' as const,
+        text: '问题',
+        pixelFingerprint: 'a'.repeat(64)
+      }
+      const before = {
+        ...t.observation,
+        messages: [
+          anchor,
+          { direction: 'system' as const, text: '[非文本消息]', pixelFingerprint: 'b'.repeat(64) }
+        ]
+      }
+      const after: typeof t.observation = {
+        ...before,
+        messages: [
+          anchor,
+          { ...before.messages[1], pixelFingerprint: 'c'.repeat(64) },
+          { direction: 'system' as const, text: '[非文本消息]', pixelFingerprint: 'd'.repeat(64) },
+          { direction: 'inbound' as const, text: '新问题' }
+        ]
+      }
+      const bubble = {
+        direction: 'inbound' as const,
+        x: 400,
+        y: 180,
+        width: 140,
+        height: 44,
+        fingerprint: 'a'.repeat(64)
+      }
+      prior.bubbles = [bubble, { ...bubble, fingerprint: 'b'.repeat(64) }]
+      t.driver['pendingImage'] = {
+        observation: before,
+        assetId: '00000000-0000-4000-8000-000000000001',
+        png: await new Jimp({ width: 8, height: 8, color: 0xffcc00ff }).getBuffer('image/png'),
+        historyArea: prior.visual.history,
+        historyFingerprint: 'different',
+        before: prior.capture.pixels,
+        evidence: prior
+      }
+      vi.spyOn(t.driver, 'read').mockImplementationOnce(async () => {
+        t.driver['evidence'] = {
+          ...prior,
+          observation: after,
+          bubbles: after.messages.map((m, i) => ({
+            ...bubble,
+            fingerprint: m.pixelFingerprint ?? 'e'.repeat(64),
+            direction: i === 2 ? 'outbound' : 'inbound'
+          }))
+        }
+        return after
+      })
+      f.fetch
+        .mockResolvedValueOnce(
+          response({
+            contact: 'Q',
+            privateChat: true,
+            latestOutboundMatches: true,
+            newOutboundMatches: true,
+            editorEmpty: true,
+            outboundImageCount: 1
+          })
+        )
+        .mockResolvedValueOnce(
+          response({
+            pairs: [
+              {
+                index: 1,
+                before: { kind: 'file', name: 'one.zip', size: '1K' },
+                after: { kind: 'file', name: mode === 'same' ? 'one.zip' : 'other.zip', size: '1K' }
+              }
+            ]
+          })
+        )
+      expect(await advance(t.driver['checkImageReceipt'](t.signal))).toBe(
+        mode === 'same' ? 'sent' : 'unknown'
+      )
+      if (mode === 'same')
+        expect(t.driver.receiptBaseline()?.messages).toEqual(after.messages.slice(0, 2))
+      expect(f.tap).not.toHaveBeenCalled()
+    }
+  )
+  it('reanchors changed media on a new incoming turn using retained paired screenshots', async () => {
+    const t = await connected()
+    const anchor = {
+      direction: 'inbound' as const,
+      text: '已处理',
+      pixelFingerprint: 'a'.repeat(64)
+    }
+    const before = {
+      ...t.observation,
+      messages: [
+        anchor,
+        { direction: 'system' as const, text: '[非文本消息]', pixelFingerprint: 'b'.repeat(64) }
+      ]
+    }
+    const after = {
+      ...before,
+      messages: [
+        anchor,
+        { ...before.messages[1], pixelFingerprint: 'c'.repeat(64) },
+        { direction: 'inbound' as const, text: '新的问题' }
+      ]
+    }
+    const bubble = {
+      direction: 'inbound' as const,
+      x: 400,
+      y: 180,
+      width: 140,
+      height: 44,
+      fingerprint: 'a'.repeat(64)
+    }
+    const prior = {
+      ...t.driver['evidence']!,
+      observation: before,
+      bubbles: [bubble, { ...bubble, fingerprint: 'b'.repeat(64) }]
+    }
+    t.driver['acceptedEvidence'] = prior
+    t.driver['evidence'] = {
+      ...prior,
+      observation: after,
+      bubbles: [
+        bubble,
+        { ...bubble, fingerprint: 'c'.repeat(64) },
+        { ...bubble, fingerprint: 'd'.repeat(64) }
+      ]
+    }
+    f.fetch.mockResolvedValue(
+      response({
+        pairs: [
+          {
+            index: 1,
+            before: { kind: 'file', name: 'one.zip', size: '1K' },
+            after: { kind: 'file', name: 'one.zip', size: '1K' }
+          }
+        ]
+      })
+    )
+    expect((await t.driver.reconcileHistory(before, after, t.signal))?.messages).toEqual(
+      after.messages.slice(0, 2)
+    )
+    t.driver['acceptedEvidence'] = {
+      ...prior,
+      observation: { ...before, messages: [...before.messages, anchor] },
+      bubbles: [...prior.bubbles, bubble]
+    }
+    expect(await t.driver.reconcileHistory(before, after, t.signal)).toBeUndefined()
+    t.driver['acceptedEvidence'] = undefined
+    expect(await t.driver.reconcileHistory(before, after, t.signal)).toBeUndefined()
+    expect(f.tap).not.toHaveBeenCalled()
   })
   it('repairs a scroll-related OCR difference only when both captured bubbles read identically', async () => {
     const t = await connected()

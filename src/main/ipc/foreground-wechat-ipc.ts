@@ -77,6 +77,9 @@ export function registerForegroundWechatIpc(
         dispatchFailure: () => driver.dispatchFailure(),
         receiptText: () => driver.receiptText(),
         receiptFingerprint: () => driver.receiptFingerprint(),
+        receiptBaseline: () => driver.receiptBaseline(),
+        reconcileHistory: (baseline, next, signal) =>
+          driver.reconcileHistory(baseline, next, signal),
         seed: (messages) => driver.seed(messages),
         accept: (observation) => driver.accept(observation),
         read: (signal, fresh) => driver.read(signal, fresh),
