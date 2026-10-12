@@ -208,6 +208,72 @@ async function connected() {
   return { driver, signal, observation }
 }
 describe('project foreground sender boundaries', () => {
+  it('reads screenshots without a provider default reasoning delay', async () => {
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows
+    )
+    const signal = controller().signal
+    await advance(driver.connect('Q', signal, 'current_chat'))
+    f.fetch.mockImplementation(async (_url, request) => {
+      const body = JSON.parse(request.body)
+      return body.reasoning_effort === 'none'
+        ? response(visual())
+        : {
+            ok: false,
+            status: 504,
+            json: async () => ({ error: { message: 'reasoning timeout' } })
+          }
+    })
+    expect((await advance(driver.read(signal))).contact).toBe('Q')
+    expect(f.type).not.toHaveBeenCalled()
+  })
+  it('negotiates an unsupported reasoning option once and retains legacy vision compatibility', async () => {
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows
+    )
+    const signal = controller().signal
+    await advance(driver.connect('Q', signal, 'current_chat'))
+    let rejected = 0
+    f.fetch.mockImplementation(async (_url, request) => {
+      if ('reasoning_effort' in JSON.parse(request.body)) {
+        if (++rejected > 1) throw new Error('unsupported option was not remembered')
+        return {
+          ok: false,
+          status: 400,
+          json: async () => ({
+            error: { param: 'reasoning_effort', message: 'Unsupported parameter: reasoning_effort' }
+          })
+        }
+      }
+      return response(visual())
+    })
+    expect((await advance(driver.read(signal))).contact).toBe('Q')
+    changeScreen()
+    expect((await advance(driver.read(signal))).contact).toBe('Q')
+    expect(rejected).toBe(1)
+    expect(f.type).not.toHaveBeenCalled()
+  })
+  it('does not disguise unrelated provider rejection as reasoning negotiation', async () => {
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows
+    )
+    const signal = controller().signal
+    await advance(driver.connect('Q', signal, 'current_chat'))
+    let calls = 0
+    f.fetch.mockImplementation(async () => {
+      if (++calls > 1) return response(visual())
+      return {
+        ok: false,
+        status: 400,
+        json: async () => ({ error: { param: 'model', message: 'Invalid model' } })
+      }
+    })
+    await expect(advance(driver.read(signal))).rejects.toThrow('model_failed')
+    expect(calls).toBe(1)
+  })
   it('does not keep polling the model for an unchanged media chat after cache expiry', async () => {
     const driver = new ForegroundWechatDriver(
         () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
@@ -1378,6 +1444,60 @@ describe('project foreground sender boundaries', () => {
     expect(await advance(driver.verifyListName('Q', signal))).toBe(false)
     expect(f.click).toHaveBeenCalledTimes(2)
     expect(f.tap.mock.calls.some(([key]) => key === 'enter')).toBe(false)
+  })
+  it('does not hide WeChat with a second Escape after search has already closed', async () => {
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows
+    )
+    const signal = controller().signal
+    await advance(driver.connect('Q', signal, 'current_chat'))
+    let escapes = 0
+    f.tap.mockImplementation((key) => {
+      if (key === 'escape' && ++escapes > 1) f.active = 8
+    })
+    f.fetch
+      .mockResolvedValueOnce(response({ search: [0.2, 0.1], loggedIn: true }))
+      .mockResolvedValueOnce(
+        response({
+          matches: [{ name: 'Q', privateChat: true, point: [0.2, 0.25] }],
+          hasMore: false
+        })
+      )
+    expect(await advance(driver.verifyListName('Q', signal))).toBe(true)
+    expect(f.active).toBe(71)
+    expect(escapes).toBe(1)
+  })
+  it('dismisses a remaining owned search popup through freshly verified chat navigation', async () => {
+    f.searchTyping = true
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows
+    )
+    const signal = controller().signal
+    await advance(driver.connect('Q', signal, 'current_chat'))
+    let escapes = 0,
+      clicks = 0
+    f.tap.mockImplementation((key) => {
+      if (key === 'escape' && ++escapes > 1) f.active = 8
+    })
+    f.click.mockImplementation(() => {
+      if (++clicks === 2) f.occluded = false
+    })
+    f.fetch
+      .mockResolvedValueOnce(response({ search: [0.2, 0.1], loggedIn: true }))
+      .mockResolvedValueOnce(
+        response({
+          matches: [{ name: 'Q', privateChat: true, point: [0.2, 0.25] }],
+          hasMore: false
+        })
+      )
+      .mockResolvedValueOnce(response({ loggedIn: true, overlay: false, chatTab: [0.04, 0.18] }))
+    expect(await advance(driver.verifyListName('Q', signal))).toBe(true)
+    expect(f.active).toBe(71)
+    expect(f.occluded).toBe(false)
+    expect(escapes).toBe(1)
+    expect(f.move).toHaveBeenCalledWith(32, 108)
   })
   it('allows a verified owned search popup only while searching and closes it before normal reads', async () => {
     f.searchTyping = true

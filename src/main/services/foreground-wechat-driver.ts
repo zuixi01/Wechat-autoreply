@@ -142,6 +142,7 @@ const wait = (ms: number, signal: AbortSignal): Promise<void> =>
 
 /** Desktop input belongs to this Electron main process. It is independent of Codex tools. */
 export class ForegroundWechatDriver implements ForegroundDriver {
+  private readonly unsupportedReasoning = new Set<string>()
   manual(observation: ForegroundObservation, messages: ForegroundObservation['messages']): void {
     this.configuration().manual?.(observation, messages)
   }
@@ -308,9 +309,11 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
     )
       throw new Error('model_endpoint_invalid')
+    const endpoint = hashContext([url.href, model.modelName, model.apiKey])
     for (let attempt = 0; attempt < 2; attempt++)
       try {
         const started = Date.now()
+        const quickVision = jsonOutput && !this.unsupportedReasoning.has(endpoint)
         if (jsonOutput) this.performance.visionRequests++
         const response = await fetch(url, {
           method: 'POST',
@@ -322,11 +325,27 @@ export class ForegroundWechatDriver implements ForegroundDriver {
               { role: 'user', content: input }
             ],
             temperature: jsonOutput ? 0 : 0.65,
+            // Screenshot reading is extraction. Provider-default reasoning can consume
+            // the entire deadline before emitting any JSON; retain all pixel/send guards.
+            ...(quickVision ? { reasoning_effort: 'none' } : {}),
             ...(!jsonOutput ? { max_tokens: 512 } : {}),
             ...(jsonOutput ? { response_format: { type: 'json_object' } } : {})
           }),
           signal: AbortSignal.any([signal, AbortSignal.timeout(45000)])
         })
+        if (!response.ok && quickVision && [400, 422].includes(response.status)) {
+          const error = (await response.json().catch(() => null))?.error
+          if (
+            error?.param === 'reasoning_effort' ||
+            (typeof error?.message === 'string' &&
+              /reasoning_effort/i.test(error.message) &&
+              /unsupported|not supported|unknown|unrecognized|invalid/i.test(error.message))
+          ) {
+            this.unsupportedReasoning.add(endpoint)
+            attempt-- // One compatibility negotiation, not a network retry.
+            continue
+          }
+        }
         if (!response.ok)
           throw new Error(
             response.status === 429 || response.status >= 500 ? 'model_busy' : 'model_failed'
@@ -498,12 +517,17 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       const robot = getRobot()
       if (!robot) throw new Error('desktop_input_unavailable')
       // Leave search without opening a result or consuming its unread messages.
-      // WeChat 4 first clears the query and can show an empty network popup;
-      // the second Escape releases search focus and closes that surface.
-      for (let attempt = 0; attempt < 2; attempt++) {
+      // An unconditional second Escape can hide the main window after search
+      // closes. Only a remaining verified owned popup needs further cleanup.
+      await this.current(signal, true)
+      robot.keyTap('escape')
+      await wait(200, signal)
+      try {
+        await this.current(signal)
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== 'screen_obscured') throw error
         await this.current(signal, true)
-        robot.keyTap('escape')
-        await wait(200, signal)
+        await this.showChatList(signal, true)
       }
       await this.current(signal)
     }
@@ -653,13 +677,13 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       input: visual.list
     })
   }
-  async showChatList(signal: AbortSignal): Promise<void> {
+  async showChatList(signal: AbortSignal, search = false): Promise<void> {
     const resultSchema = z.strictObject({
       loggedIn: z.boolean(),
       overlay: z.boolean(),
       chatTab: point
     })
-    let capture = await this.capture(signal)
+    let capture = await this.capture(signal, search)
     let visual = resultSchema.parse(
       await this.vision(
         capture,
@@ -669,6 +693,7 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     )
     if (!visual.loggedIn) throw new Error('wechat_not_logged_in')
     if (visual.overlay) {
+      if (search) throw new Error('list_unavailable')
       await this.current(signal)
       if (signal.aborted) throw new Error('cancelled')
       const robot = getRobot()
@@ -686,7 +711,7 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     }
     if (!visual.loggedIn || visual.overlay || visual.chatTab[0] >= 0.12 || visual.chatTab[1] >= 0.6)
       throw new Error('list_unavailable')
-    await this.click(capture, visual.chatTab, signal)
+    await this.click(capture, visual.chatTab, signal, search)
     await wait(350, signal)
   }
   private listFingerprint(
