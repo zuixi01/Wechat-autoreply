@@ -507,13 +507,16 @@ export class ForegroundWechatDriver implements ForegroundDriver {
   async verifyListName(target: string, signal: AbortSignal): Promise<boolean> {
     let unique = true
     let failure: unknown
+    let searching = false
     try {
-      await this.findContact(target, signal)
+      await this.findContact(target, signal, () => {
+        searching = true
+      })
     } catch (error) {
       if (error instanceof Error && error.message === 'contact_not_unique') unique = false
       else failure = error
     }
-    if (!signal.aborted) {
+    if (searching && !signal.aborted) {
       const robot = getRobot()
       if (!robot) throw new Error('desktop_input_unavailable')
       // Leave search without opening a result or consuming its unread messages.
@@ -537,7 +540,8 @@ export class ForegroundWechatDriver implements ForegroundDriver {
   }
   private async findContact(
     target: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    entered?: () => void
   ): Promise<{ capture: Capture; point: z.infer<typeof point> }> {
     const capture = await this.capture(signal)
     const result = z
@@ -551,6 +555,7 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       )
     if (!result.loggedIn) throw new Error('wechat_not_logged_in')
     await this.click(capture, result.search, signal)
+    entered?.()
     const robot = getRobot()
     if (!robot) throw new Error('desktop_input_unavailable')
     await this.current(signal, true)

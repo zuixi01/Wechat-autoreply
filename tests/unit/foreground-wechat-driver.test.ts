@@ -1468,6 +1468,24 @@ describe('project foreground sender boundaries', () => {
     expect(f.active).toBe(71)
     expect(escapes).toBe(1)
   })
+  it('preserves a pre-search model timeout without pressing Escape on the main window', async () => {
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows
+    )
+    const signal = controller().signal
+    await advance(driver.connect('Q', signal, 'current_chat'))
+    f.fetch.mockRejectedValue(
+      Object.assign(new Error('synthetic timeout'), { name: 'TimeoutError' })
+    )
+    f.tap.mockImplementation((key) => {
+      if (key === 'escape') f.active = 8
+    })
+    await expect(advance(driver.verifyListName('Q', signal))).rejects.toThrow('model_timeout')
+    expect(f.active).toBe(71)
+    expect(f.click).not.toHaveBeenCalled()
+    expect(f.tap).not.toHaveBeenCalled()
+  })
   it('dismisses a remaining owned search popup through freshly verified chat navigation', async () => {
     f.searchTyping = true
     const driver = new ForegroundWechatDriver(
