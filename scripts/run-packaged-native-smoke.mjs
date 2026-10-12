@@ -60,7 +60,7 @@ async function run() {
     const timer = setTimeout(() => {
       child.kill()
       reject(new Error('packaged_smoke_timeout'))
-    }, 20000)
+    }, 90000) // Cold executable startup + bounded factory verification + checks.
     child.once('error', (error) => {
       clearTimeout(timer)
       reject(error)

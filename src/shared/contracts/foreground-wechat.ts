@@ -114,8 +114,10 @@ export function sameForegroundMessages(
     a.every(
       (message, index) =>
         message.direction === b[index].direction &&
-        ((message.pixelFingerprint && message.pixelFingerprint === b[index].pixelFingerprint) ||
-          canonical(message.text) === canonical(b[index].text))
+        (message.direction === 'system' && message.pixelFingerprint && b[index].pixelFingerprint
+          ? message.pixelFingerprint === b[index].pixelFingerprint
+          : (message.pixelFingerprint && message.pixelFingerprint === b[index].pixelFingerprint) ||
+            canonical(message.text) === canonical(b[index].text))
     )
   )
 }

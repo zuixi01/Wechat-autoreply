@@ -370,16 +370,25 @@ export class ForegroundBatchRuntime {
         if (this.queue.length > 1) this.queue.push(this.queue.shift()!)
         return
       }
-      if ((row.unread === null && !row.unreadDot) || (row.unread !== null && row.unread > 80)) {
+      if (!this.checkpoints.get(row.name)?.checkpoint) {
+        const checkpoint = this.store?.loadSingle?.(row.name)
+        if (checkpoint) this.checkpoints.set(row.name, { row, checkpoint })
+      }
+      // The badge is needed only to establish an initial unread boundary.
+      // A restored/session boundary proves new messages independently of its count.
+      if (
+        !this.sessions.get(row.name)?.hasBoundary() &&
+        !this.checkpoints.get(row.name)?.checkpoint &&
+        ((row.unread === null && !row.unreadDot) || (row.unread !== null && row.unread > 80))
+      ) {
         this.issues.set(row.name, 'unread_message_unverified')
         this.queue.shift()
         return
       }
-      const verifyPreview = !this.sessions.has(row.name) && !this.pendingCheckpoint(row.name)
-      if (!this.checkpoints.has(row.name)) {
-        const checkpoint = this.store?.loadSingle?.(row.name)
-        if (checkpoint) this.checkpoints.set(row.name, { row, checkpoint })
-      }
+      const verifyPreview =
+        !this.sessions.get(row.name)?.hasBoundary() &&
+        !this.checkpoints.get(row.name)?.checkpoint &&
+        !this.pendingCheckpoint(row.name)
       if (
         row.unread !== 0 &&
         !this.checkpoints.get(row.name)?.checkpoint &&

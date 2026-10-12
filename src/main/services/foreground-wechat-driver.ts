@@ -173,6 +173,15 @@ export class ForegroundWechatDriver implements ForegroundDriver {
   >()
   private bubbleText = new Map<string, string>()
   private mediaBubbles = new Set<string>()
+  /** Explicit owner re-enrollment discards classifications with the old boundary. */
+  resetHistory(): void {
+    this.readCache.clear()
+    this.bubbleText.clear()
+    this.mediaBubbles.clear()
+    this.inputCache.clear()
+    this.evidence = undefined
+    this.acceptedEvidence = undefined
+  }
   private inputCache = new Map<string, { text: string; at: number }>()
   private lastReceipt?: string
   private lastFailure?: ForegroundDispatchFailure

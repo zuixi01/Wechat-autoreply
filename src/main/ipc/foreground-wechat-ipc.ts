@@ -60,11 +60,9 @@ export function registerForegroundWechatIpc(
       })
     }
   })
-  const runtime = new ForegroundWechatRuntime(
-    new ForegroundWechatDriver(() => configured(runtime.activity().target)),
-    journal,
-    true,
-    (value) => journal.saveSingle(value)
+  const personalDriver = new ForegroundWechatDriver(() => configured(runtime.activity().target))
+  const runtime = new ForegroundWechatRuntime(personalDriver, journal, true, (value) =>
+    journal.saveSingle(value)
   )
   const batch = new ForegroundBatchRuntime(
     new ForegroundBatchNavigator(
@@ -172,7 +170,12 @@ export function registerForegroundWechatIpc(
     try {
       await batch.pause()
       if (epoch !== operation) return runtime.status()
-      if (input.resetBaseline) journal.clearSingle(input.target)
+      if (input.resetBaseline) {
+        await runtime.pause()
+        if (epoch !== operation) return runtime.status()
+        journal.clearSingle(input.target)
+        personalDriver.resetHistory()
+      }
       const status = await runtime.start(
         input.target,
         input.connectionMode,

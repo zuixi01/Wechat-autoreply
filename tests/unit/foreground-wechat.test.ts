@@ -54,6 +54,24 @@ function fixture(polling = false) {
   }
 }
 describe('project-owned foreground WeChat runtime', () => {
+  it('refuses an unproven boundary between different verified media pixels', async () => {
+    const f = fixture()
+    const media = (pixelFingerprint: string) => ({
+      direction: 'system' as const,
+      text: '[非文本消息]',
+      pixelFingerprint
+    })
+    f.set(observation([media('b'.repeat(64)), msg('这个图片你看一下')]))
+    await f.runtime.start('Q', 'current_chat', undefined, {
+      baseline: observation([media('a'.repeat(64))]),
+      pending: false
+    })
+    await f.runtime.tick()
+    expect(f.runtime.status().reason).toBe('message_gap')
+    expect(f.driver.dispatch).not.toHaveBeenCalled()
+    expect(f.records).toEqual([])
+    await f.runtime.pause()
+  })
   it('resumes saved progress after an explicit reconnect to a new window with continuous history', async () => {
     const f = fixture()
     const saved = { baseline: observation([msg('已处理的问题')]), pending: false }

@@ -124,6 +124,77 @@ function fixture(count = 15, persisted?: SqliteForegroundJournal) {
   }
 }
 describe('foreground batch scanning and processing', () => {
+  it('does not treat a failed initial connection as a verified unread boundary', async () => {
+    const db = new SqliteForegroundJournal(':memory:'),
+      f = fixture(1, db)
+    try {
+      f.rows[0].preview = 'mismatched preview'
+      await f.runtime.start(['客户0'])
+      await f.runtime.tick()
+      expect(f.runtime.status().issues).toContainEqual({
+        target: '客户0',
+        reason: 'unread_message_unverified'
+      })
+      expect(db.loadSingle('客户0')).toBeUndefined()
+      f.rows[0].unread = null
+      f.rows[0].unreadDot = false
+      f.rows[0].preview = '问题0'
+      for (let i = 0; i < 5; i++) await f.runtime.tick()
+      expect(f.records.filter((r) => r.state === 'sent')).toEqual([])
+      expect(db.loadSingle('客户0')).toBeUndefined()
+      expect(f.runtime.status().issues).toContainEqual({
+        target: '客户0',
+        reason: 'unread_message_unverified'
+      })
+    } finally {
+      await f.runtime.pause()
+      db.close()
+    }
+  })
+  it('still isolates an unknown unread count without a saved message boundary', async () => {
+    const f = fixture(1)
+    f.rows[0].unread = null
+    f.rows[0].unreadDot = false
+    try {
+      await f.runtime.start(['客户0'])
+      await f.runtime.tick()
+      expect(f.records).toEqual([])
+      expect(f.drivers.size).toBe(0)
+      expect(f.runtime.status().issues).toContainEqual({
+        target: '客户0',
+        reason: 'unread_message_unverified'
+      })
+    } finally {
+      await f.runtime.pause()
+    }
+  })
+  it.each([null, 81])(
+    'uses saved message boundaries when the unread count is %s',
+    async (unread) => {
+      const db = new SqliteForegroundJournal(':memory:'),
+        f = fixture(1, db)
+      try {
+        const observation = structuredClone(f.observations.get('客户0')!)
+        db.saveSingle({
+          baseline: { ...observation, messages: observation.messages.slice(0, 1) },
+          pending: false
+        })
+        f.rows[0].unread = unread
+        f.rows[0].unreadDot = false
+        await f.runtime.start(['客户0'])
+        for (let i = 0; i < 4; i++) await f.runtime.tick()
+        expect(
+          f.records.filter((r) => r.target === '客户0' && r.state === 'sent').map((r) => r.question)
+        ).toEqual(['问题0'])
+        for (let i = 0; i < 10; i++) await f.runtime.tick()
+        expect(f.records.filter((r) => r.state === 'sent')).toHaveLength(1)
+        expect(f.runtime.status().issues).toEqual([])
+      } finally {
+        await f.runtime.pause()
+        db.close()
+      }
+    }
+  )
   it('finishes queued models before a costly refresh when every target already has work', async () => {
     const f = fixture(2)
     const releases: ((text: string) => void)[] = []

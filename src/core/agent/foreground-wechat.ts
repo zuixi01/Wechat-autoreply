@@ -299,6 +299,9 @@ export class ForegroundWechatRuntime {
   hasPending(): boolean {
     return this.pendingWork
   }
+  hasBoundary(): boolean {
+    return Boolean(this.baseline)
+  }
   private changed(): void {
     if (this.baseline)
       this.checkpoint?.({

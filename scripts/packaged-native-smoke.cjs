@@ -14,15 +14,22 @@ const resources = join(require('node:path').dirname(process.execPath), 'resource
 const { createPackagedWindowsBridge, nativeAdapterBuildInfo } = require(
   join(resources, 'app.asar', 'out/main/native-adapter.js')
 )
-const timer = setTimeout(() => {
-  process.stderr.write('packaged_native_smoke_timeout\n')
-  process.exit(1)
-}, 15000)
+// First execution from a new directory may spend tens of seconds verifying
+// shipped files. This startup budget does not change native command deadlines.
+const deadline = (stage, milliseconds) =>
+  setTimeout(() => {
+    phase(`deadline-expired:${stage}`)
+    process.stderr.write(`packaged_native_smoke_timeout:${stage}\n`)
+    process.exit(1)
+  }, milliseconds)
+let timer = deadline('factory', 60000)
 
 async function run() {
   phase('factory-start')
   const bridge = await createPackagedWindowsBridge()
   phase('factory-ready')
+  clearTimeout(timer)
+  timer = deadline('checks', 15000)
   let info
   try {
     phase('info-start')

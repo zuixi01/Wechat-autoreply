@@ -208,6 +208,35 @@ async function connected() {
   return { driver, signal, observation }
 }
 describe('project foreground sender boundaries', () => {
+  it('allows an explicit history reset to discard a mistaken media classification', async () => {
+    const png = PNG.sync.read(f.png),
+      color = [155, 240, 157, 255]
+    for (let row = 160; row < 204; row++)
+      for (let col = 580; col < 720; col++) png.data.set(color, (row * 800 + col) * 4)
+    for (let dx = 0; dx < 8; dx++)
+      for (let row = 182 - dx; row <= 182 + dx; row++)
+        png.data.set(color, (row * 800 + 727 - dx) * 4)
+    f.png = PNG.sync.write(png)
+    const driver = new ForegroundWechatDriver(
+        () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+        windows
+      ),
+      signal = controller().signal
+    await advance(driver.connect('Q', signal, 'current_chat'))
+    f.fetch.mockResolvedValueOnce(
+      response(visual('', [{ direction: 'system', text: '[非文本消息]' }]))
+    )
+    const first = await advance(driver.read(signal))
+    expect(first.messages[0].pixelFingerprint).toMatch(/^[a-f0-9]{64}$/)
+    driver.accept(first)
+    driver.resetHistory()
+    f.fetch.mockResolvedValueOnce(
+      response(visual('', [{ direction: 'outbound', text: '普通文字' }]))
+    )
+    const next = await advance(driver.read(signal))
+    expect(next.messages[0]).toMatchObject({ direction: 'outbound', text: '普通文字' })
+    expect(next.messages[0].pixelFingerprint).toBe(first.messages[0].pixelFingerprint)
+  })
   it('preserves an independently stored non-text boundary when identical pixels get a new OCR label', async () => {
     const png = PNG.sync.read(f.png),
       color = [155, 240, 157, 255]
