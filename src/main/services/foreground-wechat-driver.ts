@@ -39,6 +39,14 @@ import {
   type ReplyPart
 } from '../../shared/contracts/foreground-reply-plan'
 import type { PersonalStickerStore } from './personal-sticker-store'
+import {
+  ListVisionSchema,
+  NavigationVisionSchema,
+  ChatVisionSchema,
+  SearchLocatorVisionSchema,
+  SearchMatchesVisionSchema,
+  type VisionSchema
+} from './foreground-vision-schema'
 
 const point = z.tuple([z.number().min(0).max(1), z.number().min(0).max(1)])
 const area = z
@@ -143,6 +151,7 @@ const wait = (ms: number, signal: AbortSignal): Promise<void> =>
 /** Desktop input belongs to this Electron main process. It is independent of Codex tools. */
 export class ForegroundWechatDriver implements ForegroundDriver {
   private readonly unsupportedReasoning = new Set<string>()
+  private readonly unsupportedStructuredVision = new Set<string>()
   manual(observation: ForegroundObservation, messages: ForegroundObservation['messages']): void {
     this.configuration().manual?.(observation, messages)
   }
@@ -295,7 +304,8 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     system: string,
     input: unknown,
     signal: AbortSignal,
-    jsonOutput = false
+    jsonOutput = false,
+    schema?: VisionSchema
   ): Promise<string> {
     if (!model.apiKey || !model.modelName) throw new Error('model_not_configured')
     let url: URL
@@ -314,6 +324,7 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       try {
         const started = Date.now()
         const quickVision = jsonOutput && !this.unsupportedReasoning.has(endpoint)
+        const structured = jsonOutput && schema && !this.unsupportedStructuredVision.has(endpoint)
         if (jsonOutput) this.performance.visionRequests++
         const response = await fetch(url, {
           method: 'POST',
@@ -329,17 +340,39 @@ export class ForegroundWechatDriver implements ForegroundDriver {
             // the entire deadline before emitting any JSON; retain all pixel/send guards.
             ...(quickVision ? { reasoning_effort: 'none' } : {}),
             ...(!jsonOutput ? { max_tokens: 512 } : {}),
-            ...(jsonOutput ? { response_format: { type: 'json_object' } } : {})
+            ...(jsonOutput
+              ? {
+                  response_format: structured
+                    ? {
+                        type: 'json_schema',
+                        json_schema: { name: 'wechat_visual', strict: true, schema }
+                      }
+                    : { type: 'json_object' }
+                }
+              : {})
           }),
           signal: AbortSignal.any([signal, AbortSignal.timeout(45000)])
         })
-        if (!response.ok && quickVision && [400, 422].includes(response.status)) {
+        if (!response.ok && (quickVision || structured) && [400, 422].includes(response.status)) {
           const error = (await response.json().catch(() => null))?.error
           if (
-            error?.param === 'reasoning_effort' ||
-            (typeof error?.message === 'string' &&
-              /reasoning_effort/i.test(error.message) &&
-              /unsupported|not supported|unknown|unrecognized|invalid/i.test(error.message))
+            structured &&
+            typeof error?.message === 'string' &&
+            /response_format|json_schema/i.test(error.message) &&
+            /unsupported|not supported|unknown parameter|unrecognized parameter/i.test(
+              error.message
+            )
+          ) {
+            this.unsupportedStructuredVision.add(endpoint)
+            attempt--
+            continue
+          }
+          if (
+            quickVision &&
+            (error?.param === 'reasoning_effort' ||
+              (typeof error?.message === 'string' &&
+                /reasoning_effort/i.test(error.message) &&
+                /unsupported|not supported|unknown|unrecognized|invalid/i.test(error.message)))
           ) {
             this.unsupportedReasoning.add(endpoint)
             attempt-- // One compatibility negotiation, not a network retry.
@@ -390,7 +423,8 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     capture: Capture,
     prompt: string,
     signal: AbortSignal,
-    reference?: Buffer
+    reference?: Buffer,
+    schema?: VisionSchema
   ): Promise<unknown> {
     const config = this.configuration()
     if (!config.vision.capabilities.includes('vision')) throw new Error('vision_not_configured')
@@ -419,7 +453,8 @@ export class ForegroundWechatDriver implements ForegroundDriver {
           : [])
       ],
       signal,
-      true
+      true,
+      schema
     )
     try {
       return parseJson(result)
@@ -550,7 +585,9 @@ export class ForegroundWechatDriver implements ForegroundDriver {
         await this.vision(
           capture,
           '定位微信主窗口左侧会话列表上方的搜索输入框中心，坐标用整张图宽高的 0..1 比例。返回 {"search":[x,y],"loggedIn":true}。只有已登录并显示会话列表才可 loggedIn=true；登录页面必须 false。',
-          signal
+          signal,
+          undefined,
+          SearchLocatorVisionSchema
         )
       )
     if (!result.loggedIn) throw new Error('wechat_not_logged_in')
@@ -568,7 +605,9 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       await this.vision(
         searchCapture,
         `只读取左侧搜索下拉框的本地联系人结果：名字严格等于 ${JSON.stringify(target)}。可包含“最常使用”“联系人”分区中带头像的单人结果；排除搜索输入框、右侧聊天、搜索网络结果、放大镜搜索建议、聊天记录、公众号和群。每项提供 name、privateChat（只有单人联系人为 true）、point（结果行中心的整图 0..1 坐标）。返回 {"matches":[...],"hasMore":false}。hasMore仅判断本地联系人区域：存在正在加载、裁切、可滚动的未展示本地联系人、展开更多本地联系人的按钮时为true；本地区域结束且所有本地结果均完整可见时为false。下方网络搜索建议不属于联系人区域，它们是否有更多或加载中不影响hasMore。不得假设截图之外存在结果，也不得忽略实际可见的本地更多入口。`,
-        signal
+        signal,
+        undefined,
+        SearchMatchesVisionSchema
       )
     )
     if (matches.hasMore) throw new Error('list_incomplete')
@@ -598,7 +637,9 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       await this.vision(
         capture,
         '读取微信左侧普通聊天会话列表，不是搜索结果或通讯录。返回 {"loggedIn":true,"completeRows":true,"currentContact":"右侧顶部完整会话标题","inputText":"右侧输入框现有草稿全文，空为字符串空","list":[x,y,w,h],"input":[x,y,w,h],"rows":[{"name":"可见会话名称原文","nameComplete":true,"preview":"会话行消息摘要原文","unread":0,"unreadDot":false,"point":[x,y]}],"atTop":false,"atBottom":false}。矩形为整图0..1左上宽高。list仅可滚动会话列表，不含搜索框和左边导航栏；input仅右侧输入框。rows从上到下包含所有完整可见行，不能合并同名行。名称若被截断，name只读可见部分并保留省略号、nameComplete=false；未截断且可完全识别才nameComplete=true。摘要只读可见部分并保留原省略号，不补全隐藏内容；point在该行名称中部，不要点红点、菜单或关闭图标。unread为可明确读出的未读数字，无未读为0。头像右上角只有实心红点、没有数字时 unread=null、unreadDot=true，且必须额外提供 badge:[x,y,w,h] 紧贴该红点的矩形，只包围红点不包括头像。有数字但读不清时 unread=null、unreadDot=false，不把数字徽标当纯红点。未读不确定时返回null，不能推断为0。没有纯红点时可以省略badge。只要所有完整可见行都已逐行列出即可completeRows=true；有遮挡、无法定位某完整行或遗漏行时false。边缘裁切的非完整行不计入，不猜测其内容。atTop仅滚动条明确位于顶部或明确没有可滚动内容时true，否则false。atBottom仅滚动条明确位于底部或明确没有可滚动内容时true，否则false。若不是普通聊天列表或有弹窗遮挡，loggedIn=false。不得从右侧聊天推测列表内容。',
-        signal
+        signal,
+        undefined,
+        ListVisionSchema
       )
     )
     if (!visual.loggedIn) throw new Error('list_unavailable')
@@ -693,7 +734,9 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       await this.vision(
         capture,
         '识别微信主窗口是否已登录，定位最左侧导航栏的普通聊天图标（气泡图标，不是通讯录、朋友圈、收藏或搜索）。返回 {"loggedIn":true,"overlay":false,"chatTab":[x,y]}。坐标为整图0..1。overlay只在图片预览或可用Esc关闭的浮层遮挡主页面时true。无法确认导航图标或未登录则loggedIn=false。',
-        signal
+        signal,
+        undefined,
+        NavigationVisionSchema
       )
     )
     if (!visual.loggedIn) throw new Error('wechat_not_logged_in')
@@ -1210,7 +1253,9 @@ export class ForegroundWechatDriver implements ForegroundDriver {
                   await this.vision(
                     capture,
                     `读取当前实际打开的聊天，不能把左侧列表名字当顶部聊天对象。目标是 ${JSON.stringify(this.target)}。返回 {"contact":"顶部完整联系人名","privateChat":true,"inputText":"输入框现有草稿全文，空为字符串空","messages":[{"direction":"inbound","text":"原文"}],"header":[x,y,w,h],"history":[x,y,w,h],"input":[x,y,w,h]}。direction 每项只能是 inbound、outbound、system 三个值之一。坐标是整图 0..1 的 [左边,上边,宽,高] 矩形，不是右下角坐标；左边+宽、上边+高必须不大于 1。header 仅右侧顶部会话标题，history 仅右侧消息展示区，input 仅右侧文字输入区。messages 必须按从上到下排列，仅逐条读取完全显示的完整气泡，顶部或底部被裁切的气泡整条忽略，不能补全裁切内容；不能合并、改写或加入时间分隔、聊天标题、“新消息”标记或左侧列表。左侧为 inbound，右侧为 outbound；图片/语音/文件等非文字完整气泡用 system、text="[非文本消息]"。无法识别完整气泡字符、聊天对象、单聊/群聊、输入框或消息方向必须拒绝推断，将 privateChat=false。群聊一律 false。`,
-                    signal
+                    signal,
+                    undefined,
+                    ChatVisionSchema
                   )
                 )
               )

@@ -208,6 +208,66 @@ async function connected() {
   return { driver, signal, observation }
 }
 describe('project foreground sender boundaries', () => {
+  it('constrains full chat reading without accepting invented message fields', async () => {
+    await connected()
+    const body = JSON.parse(f.fetch.mock.calls.at(-1)![1].body)
+    expect(body.response_format.type).toBe('json_schema')
+    expect(body.response_format.json_schema.schema.properties.messages.items).toMatchObject({
+      type: 'object',
+      additionalProperties: false,
+      required: ['direction', 'text'],
+      properties: { direction: { enum: ['inbound', 'outbound', 'system'] } }
+    })
+  })
+  it('constrains search coordinates and result shape at the provider boundary', async () => {
+    const t = await connected()
+    const body = JSON.parse(f.fetch.mock.calls[0][1].body)
+    expect(body.response_format.type).toBe('json_schema')
+    expect(body.response_format.json_schema.strict).toBe(true)
+    const schema = body.response_format.json_schema.schema
+    expect(schema.additionalProperties).toBe(false)
+    expect(schema.required).toEqual(['search', 'loggedIn'])
+    expect(schema.properties.search).toMatchObject({
+      type: 'array',
+      minItems: 2,
+      maxItems: 2,
+      items: { type: 'number', minimum: 0, maximum: 1 }
+    })
+    expect(f.type).not.toHaveBeenCalled()
+    expect(t.observation.contact).toBe('Q')
+  })
+  it('falls back once only when strict structured vision is explicitly unsupported', async () => {
+    let rejected = 0
+    f.fetch.mockImplementation(async (_url, request) => {
+      const body = JSON.parse(request.body)
+      if (body.response_format?.type === 'json_schema') {
+        rejected++
+        return {
+          ok: false,
+          status: 400,
+          json: async () => ({
+            error: {
+              param: 'response_format',
+              message: 'json_schema is not supported by this model'
+            }
+          })
+        }
+      }
+      const prompt = body.messages[1].content[0].text as string
+      return response(
+        prompt.startsWith('定位')
+          ? { search: [0.2, 0.1], loggedIn: true }
+          : { matches: [{ name: 'Q', privateChat: true, point: [0.2, 0.25] }], hasMore: false }
+      )
+    })
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows
+    )
+    await advance(driver.connect('Q', controller().signal))
+    expect(rejected).toBe(1)
+    expect(f.fetch).toHaveBeenCalledTimes(3)
+  })
   it('reads screenshots without a provider default reasoning delay', async () => {
     const driver = new ForegroundWechatDriver(
       () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),

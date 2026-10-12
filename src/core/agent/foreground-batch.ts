@@ -224,8 +224,18 @@ export class ForegroundBatchRuntime {
         await this.navigator.connect(signal, false)
         this.connected = true
       }
+      const allTargetsQueued = this.targets.every(
+        (name) =>
+          this.issues.has(name) ||
+          this.queue.some((row) => row.name === name && this.sessions.get(name)?.hasPending())
+      )
+      const awaitQueuedModels =
+        allTargetsQueued &&
+        Date.now() - this.lastScanAt < 30000 &&
+        [...this.sessions.values()].some((session) => session.activity().state === 'generating')
       if (
         this.queueTurns >= 8 &&
+        !awaitQueuedModels &&
         this.queue.every((row) => this.sessions.has(row.name)) &&
         ![...this.sessions.values()].some(
           (session) => session.activity().reason === 'send_verifying'
@@ -356,6 +366,10 @@ export class ForegroundBatchRuntime {
       this.current = row.name
       this.queueTurns++
       this.state = 'processing'
+      if (this.sessions.get(row.name)?.awaitingGeneration()) {
+        if (this.queue.length > 1) this.queue.push(this.queue.shift()!)
+        return
+      }
       if ((row.unread === null && !row.unreadDot) || (row.unread !== null && row.unread > 80)) {
         this.issues.set(row.name, 'unread_message_unverified')
         this.queue.shift()

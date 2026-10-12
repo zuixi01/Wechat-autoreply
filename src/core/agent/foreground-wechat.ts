@@ -370,6 +370,9 @@ export class ForegroundWechatRuntime {
       throw new Error('window_changed')
     if (this.baseline && next.revision !== this.baseline.revision) throw new Error('rules_changed')
   }
+  awaitingGeneration(): boolean {
+    return Boolean(this.generation && !this.generation.settled)
+  }
   private additions(next: ForegroundObservation): ForegroundObservation['messages'] {
     const previous = this.baseline!.messages
     if (!previous.length) return next.messages

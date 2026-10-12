@@ -124,6 +124,35 @@ function fixture(count = 15, persisted?: SqliteForegroundJournal) {
   }
 }
 describe('foreground batch scanning and processing', () => {
+  it('finishes queued models before a costly refresh when every target already has work', async () => {
+    const f = fixture(2)
+    const releases: ((text: string) => void)[] = []
+    const runtime = new ForegroundBatchRuntime(
+      f.navigator,
+      (target) => {
+        const driver = f.factory(target)
+        driver.generate = () => new Promise<string>((resolve) => releases.push(resolve))
+        return driver
+      },
+      f.journal,
+      false
+    )
+    try {
+      await runtime.start(['客户0', '客户1'])
+      await runtime.tick()
+      await runtime.tick()
+      const reads = vi.mocked(f.navigator.page).mock.calls.length
+      for (let i = 0; i < 10; i++) await runtime.tick()
+      expect(f.navigator.page).toHaveBeenCalledTimes(reads)
+      releases.forEach((resolve) => resolve('完成回复'))
+      await Promise.resolve()
+      for (let i = 0; i < 4; i++) await runtime.tick()
+      expect(f.records.filter((record) => record.state === 'sent')).toHaveLength(2)
+    } finally {
+      releases.forEach((resolve) => resolve('取消'))
+      await runtime.pause()
+    }
+  })
   it('uses independently verified target discovery without traversing unrelated conversations', async () => {
     const f = fixture(12)
     Object.assign(f.navigator, {
