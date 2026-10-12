@@ -208,6 +208,54 @@ async function connected() {
   return { driver, signal, observation }
 }
 describe('project foreground sender boundaries', () => {
+  it('preserves an independently stored non-text boundary when identical pixels get a new OCR label', async () => {
+    const png = PNG.sync.read(f.png),
+      color = [155, 240, 157, 255]
+    for (let row = 160; row < 204; row++)
+      for (let col = 580; col < 720; col++) png.data.set(color, (row * 800 + col) * 4)
+    for (let dx = 0; dx < 8; dx++)
+      for (let row = 182 - dx; row <= 182 + dx; row++)
+        png.data.set(color, (row * 800 + 727 - dx) * 4)
+    f.png = PNG.sync.write(png)
+    const make = () =>
+      new ForegroundWechatDriver(
+        () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+        windows
+      )
+    const first = make(),
+      signal = controller().signal
+    await advance(first.connect('Q', signal, 'current_chat'))
+    f.fetch.mockResolvedValueOnce(
+      response(visual('', [{ direction: 'system', text: '[非文本消息]' }]))
+    )
+    const old = await advance(first.read(signal))
+    expect(old.messages[0].pixelFingerprint).toMatch(/^[a-f0-9]{64}$/)
+    const second = make()
+    await advance(second.connect('Q', signal, 'current_chat'))
+    second.seed(old.messages)
+    f.fetch.mockResolvedValueOnce(response(visual('', [{ direction: 'outbound', text: '😄' }])))
+    expect((await advance(second.read(signal))).messages).toEqual(old.messages)
+  })
+  it('keeps non-text placeholders out of incoming text even when OCR labels their direction', async () => {
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows
+    )
+    const signal = controller().signal
+    await advance(driver.connect('Q', signal, 'current_chat'))
+    f.fetch.mockResolvedValue(
+      response(
+        visual('', [
+          { direction: 'inbound', text: '普通问题' },
+          { direction: 'inbound', text: '[非文本消息]' },
+          { direction: 'outbound', text: '[非文本消息]' }
+        ])
+      )
+    )
+    expect(
+      (await advance(driver.read(signal))).messages.map((message) => message.direction)
+    ).toEqual(['inbound', 'system', 'system'])
+  })
   it('constrains full chat reading without accepting invented message fields', async () => {
     await connected()
     const body = JSON.parse(f.fetch.mock.calls.at(-1)![1].body)

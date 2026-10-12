@@ -172,6 +172,7 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     { visual: z.infer<typeof VisualChatSchema>; at: number; bubbles?: TextBubble[] }
   >()
   private bubbleText = new Map<string, string>()
+  private mediaBubbles = new Set<string>()
   private inputCache = new Map<string, { text: string; at: number }>()
   private lastReceipt?: string
   private lastFailure?: ForegroundDispatchFailure
@@ -195,8 +196,10 @@ export class ForegroundWechatDriver implements ForegroundDriver {
   }
   seed(messages: ForegroundObservation['messages']): void {
     for (const message of messages)
-      if (message.pixelFingerprint && message.direction !== 'system')
-        this.bubbleText.set(message.pixelFingerprint, message.text)
+      if (message.pixelFingerprint) {
+        if (message.direction === 'system') this.mediaBubbles.add(message.pixelFingerprint)
+        else this.bubbleText.set(message.pixelFingerprint, message.text)
+      }
   }
   receiptText(): string | undefined {
     return this.lastReceipt
@@ -1261,6 +1264,13 @@ export class ForegroundWechatDriver implements ForegroundDriver {
               )
       bubbles = !fresh && cached ? cached.bubbles : undefined
     }
+    // A non-text placeholder is a media handoff, never incoming prose or a manual reply.
+    visual = {
+      ...visual,
+      messages: visual.messages.map((message) =>
+        message.text === '[非文本消息]' ? { ...message, direction: 'system' as const } : message
+      )
+    }
     const headerBottom = chatHeaderBottom(
       capture.pixels,
       Math.min(visual.header[0], visual.history[0], visual.input[0]),
@@ -1304,8 +1314,20 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       if (
         candidates.length > 0 &&
         candidates.length === visual.messages.length &&
-        candidates.every((bubble, index) => bubble.direction === visual.messages[index].direction)
+        candidates.every(
+          (bubble, index) =>
+            visual.messages[index].direction === 'system' ||
+            bubble.direction === visual.messages[index].direction
+        )
       ) {
+        visual = {
+          ...visual,
+          messages: visual.messages.map((message, index) =>
+            this.mediaBubbles.has(candidates[index].fingerprint)
+              ? { ...message, direction: 'system' as const, text: '[非文本消息]' }
+              : message
+          )
+        }
         // On reconnect, exact known glyph pixels retain their verified wording.
         // A fresh recovery read deliberately replaces them to repair bad OCR.
         if (!forceFull)
@@ -1313,12 +1335,17 @@ export class ForegroundWechatDriver implements ForegroundDriver {
             ...visual,
             messages: visual.messages.map((message, index) => ({
               ...message,
-              text: this.bubbleText.get(candidates[index].fingerprint) ?? message.text
+              text:
+                message.direction === 'system'
+                  ? message.text
+                  : (this.bubbleText.get(candidates[index].fingerprint) ?? message.text)
             }))
           }
-        candidates.forEach((bubble, index) =>
-          this.bubbleText.set(bubble.fingerprint, visual.messages[index].text)
-        )
+        candidates.forEach((bubble, index) => {
+          if (visual.messages[index].direction === 'system')
+            this.mediaBubbles.add(bubble.fingerprint)
+          else this.bubbleText.set(bubble.fingerprint, visual.messages[index].text)
+        })
         visual = {
           ...visual,
           messages: visual.messages.map((message, index) => ({
