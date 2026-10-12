@@ -253,7 +253,9 @@ describe('host-only foreground evaluation bridge', () => {
     } finally {
       await f.host.close()
     }
-  })
+    // Three actual runtime lifecycles include collector polling, private Windows
+    // permission checks and ledger cleanup; the default 5 s ceiling is too tight.
+  }, 15000)
   it('rejects a foreign scope before collection and cannot seal an aborted generation as complete', async () => {
     const f = fixture('aborted')
     const original = f.assignment('learned')

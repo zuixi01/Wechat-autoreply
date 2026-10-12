@@ -3,6 +3,7 @@ import {
   chatInputTop,
   chatHeaderBottom,
   textBubbles,
+  hasUnpairedChatAvatars,
   type BubblePixels
 } from '../../src/main/services/foreground-bubbles'
 function frame(): BubblePixels {
@@ -40,6 +41,22 @@ function bubble(image: BubblePixels, x: number, y: number, outbound = false): vo
   rect(image, x + 20, y + 12, 80, 3, [15, 15, 15])
 }
 describe('physical WeChat text bubble segmentation', () => {
+  it.each([false, true])(
+    'detects a media avatar even when a new text bubble is present: %s',
+    (media) => {
+      const image = frame()
+      bubble(image, 230, 160)
+      bubble(image, 230, 300)
+      rect(image, 182, 160, 40, 40, [80, 100, 180])
+      rect(image, 182, 300, 40, 40, [80, 100, 180])
+      if (media) {
+        rect(image, 182, 230, 40, 40, [80, 100, 180])
+        rect(image, 235, 230, 95, 45, [180, 100, 70])
+      }
+      const area = [0.2, 0.18, 0.8, 0.55]
+      expect(hasUnpairedChatAvatars(image, area, textBubbles(image, area))).toBe(media)
+    }
+  )
   it('anchors the title above a clipped green bubble even when its grey divider is very light', () => {
     const image = frame()
     bubble(image, 550, 90, true)

@@ -86,6 +86,55 @@ export function chatInputTop(image: BubblePixels, left: number, hint: number): n
   )[0]
   return row === undefined ? undefined : row / image.height
 }
+/** An unmatched message avatar may indicate media beside a newly received text.
+ * This only requests a full visual read and never authorizes desktop input. */
+export function hasUnpairedChatAvatars(
+  image: BubblePixels,
+  area: readonly number[],
+  bubbles: readonly TextBubble[]
+): boolean {
+  const [x, y, w, h] = area,
+    left = Math.floor(x * image.width),
+    right = Math.min(image.width, Math.ceil((x + w) * image.width)),
+    top = Math.max(0, Math.ceil(y * image.height)),
+    bottom = Math.min(image.height, Math.floor((y + h) * image.height))
+  for (const [start, end, direction] of [
+    [left + 16, left + 72, 'inbound'],
+    [right - 90, right - 25, 'outbound']
+  ] as const) {
+    let first = -1,
+      last = -1
+    const unpaired = (): boolean => {
+      if (first < 0 || last - first < 18 || last - first > 100) return false
+      const center = (first + last) / 2
+      return !bubbles.some(
+        (b) => b.direction === direction && center >= b.y - 8 && center <= b.y + b.height + 8
+      )
+    }
+    for (let row = top; row <= bottom; row++) {
+      let ink = 0
+      if (row < bottom)
+        for (let col = Math.max(left, start); col < Math.min(right, end); col++) {
+          const i = (row * image.width + col) * 4,
+            r = image.data[i],
+            g = image.data[i + 1],
+            b = image.data[i + 2]
+          if (Math.min(r, g, b) < 225 || Math.max(r, g, b) - Math.min(r, g, b) > 16) ink++
+        }
+      // A clipped text bubble can touch this strip with a narrow edge or tail.
+      // A real avatar occupies a substantial width across consecutive rows.
+      if (ink >= 18) {
+        if (first < 0) first = row
+        last = row
+      } else if (first >= 0 && (row - last > 3 || row === bottom)) {
+        if (unpaired()) return true
+        first = -1
+        last = -1
+      }
+    }
+  }
+  return false
+}
 /** Read-only geometry for WeChat's uniform, tailed text bubbles. Images and avatars
  * lack that shape. Unsupported themes return no candidates and use visual reading. */
 export function textBubbles(image: BubblePixels, area: readonly number[]): TextBubble[] {

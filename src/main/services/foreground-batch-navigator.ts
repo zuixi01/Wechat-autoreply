@@ -1,5 +1,5 @@
 import { hashContext } from '../../core/reply/hashes'
-import { rowKey } from '../../core/agent/foreground-list-scan'
+import { rowKey, mayMatchTruncatedName } from '../../core/agent/foreground-list-scan'
 import type { BatchNavigator, ListPage, ListRow } from '../../shared/contracts/foreground-batch'
 import { ForegroundWechatDriver } from './foreground-wechat-driver'
 
@@ -22,13 +22,15 @@ export class ForegroundBatchNavigator implements BatchNavigator {
   }
   async top(signal: AbortSignal): Promise<void> {
     let previous = ''
+    let still = 0
     for (let attempt = 0; attempt < 100; attempt++) {
       const page = await this.page(signal)
+      if (page.atTop) return
       const key = hashContext(page.rows.map(rowKey))
       if (key === previous) {
-        if (!page.atTop) throw new Error('list_incomplete')
-        return
-      }
+        if (page.atTop) return
+        if (++still >= 2) throw new Error('list_incomplete')
+      } else still = 0
       previous = key
       await this.driver.listScroll(true, signal)
     }
@@ -45,6 +47,36 @@ export class ForegroundBatchNavigator implements BatchNavigator {
   }
   down(signal: AbortSignal): Promise<void> {
     return this.driver.listScroll(false, signal)
+  }
+  async inventory(targets: string[], signal: AbortSignal): Promise<ListRow[] | undefined> {
+    await this.top(signal)
+    const page = await this.page(signal)
+    if (
+      targets.some(
+        (name) =>
+          page.rows.filter((row) => row.nameComplete && row.name === name).length !== 1 ||
+          page.rows.some((row) => mayMatchTruncatedName(row, name))
+      )
+    )
+      return undefined
+    const ambiguous = new Set<string>()
+    for (const name of targets) {
+      try {
+        if (!(await this.driver.verifyListName(name, signal))) ambiguous.add(name)
+      } catch (error) {
+        if (error instanceof Error && error.message === 'list_incomplete') return undefined
+        throw error
+      }
+    }
+    const fresh = await this.page(signal)
+    if (
+      targets.some(
+        (name) => fresh.rows.filter((row) => row.nameComplete && row.name === name).length !== 1
+      )
+    )
+      throw new Error('list_changed')
+    // Preserve an explicit duplicate marker so the scheduler isolates this target.
+    return [...fresh.rows, ...fresh.rows.filter((row) => ambiguous.has(row.name))]
   }
   async open(row: ListRow, signal: AbortSignal): Promise<void> {
     await this.driver.listOpen(row, signal)

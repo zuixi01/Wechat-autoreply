@@ -6,8 +6,15 @@ import {
 import { z } from 'zod'
 import { Jimp } from 'jimp'
 import { createHash } from 'node:crypto'
-import { chatHeaderBottom, chatInputTop, textBubbles, type TextBubble } from './foreground-bubbles'
+import {
+  chatHeaderBottom,
+  chatInputTop,
+  hasUnpairedChatAvatars,
+  textBubbles,
+  type TextBubble
+} from './foreground-bubbles'
 import { listScrollEdges, unreadBadge } from './foreground-unread-badge'
+import { listRowPixels, type ListRowPixels } from './foreground-list-pixels'
 import { hashContext } from '../../core/reply/hashes'
 import { getRobot } from '../../core/rpa/util'
 import {
@@ -194,16 +201,36 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     fingerprint: string
   }
   private listShape?: z.infer<typeof ListVisualSchema>
-  private listCache = new Map<string, z.infer<typeof ListVisualSchema>>()
+  private listCache = new Map<
+    string,
+    { visual: z.infer<typeof ListVisualSchema>; templates: ListRowPixels[] }
+  >()
+  private listRowsPixels: ListRowPixels[] = []
+  private listScrollProof?: {
+    token: string
+    revision: string
+    fingerprint: string
+    up: boolean
+    attempts: number
+    area: z.infer<typeof area>
+  }
   constructor(
     private readonly configuration: () => ForegroundConfiguration,
     private readonly windows: ForegroundWindows = new ForegroundWindowBridge()
   ) {}
-  private async current(signal: AbortSignal): Promise<ForegroundWindow> {
+  private chatWindows(windows: ForegroundWindow[]): ForegroundWindow[] {
+    const wechat = windows.filter((window) => /\\(?:Weixin|WeChat)\.exe$/i.test(window.path))
+    if (wechat.length <= 1) return wechat
+    // WeChat may leave a second small login window titled 微信 after reporting
+    // “该账号已登录”. It cannot contain the full chat UI we require. Never
+    // choose between two windows large enough to be chat main windows.
+    return wechat.filter((window) => window.bounds.width >= 500 && window.bounds.height >= 400)
+  }
+  private async current(signal: AbortSignal, search = false): Promise<ForegroundWindow> {
     if (signal.aborted) throw new Error('cancelled')
     const state = await this.windows.inspect(signal)
     if (signal.aborted) throw new Error('cancelled')
-    const windows = state.windows.filter((w) => /\\(?:Weixin|WeChat)\.exe$/i.test(w.path))
+    const windows = this.chatWindows(state.windows)
     if (windows.length !== 1) throw new Error('wechat_window_unavailable')
     const window = windows[0]
     if (
@@ -215,7 +242,8 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     )
       throw new Error('window_changed')
     if (state.foreground !== window.id) throw new Error('foreground_lost')
-    if (state.occluded) throw new Error('screen_obscured')
+    if (state.occluded && !(search && state.searchOccluded === false))
+      throw new Error('screen_obscured')
     return window
   }
   private screenPixels(bounds: z.infer<typeof BoundsSchema>): Capture['pixels'] {
@@ -251,13 +279,13 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     }
     return { width: bitmap.width, height: bitmap.height, data }
   }
-  private async capture(signal: AbortSignal): Promise<Capture> {
-    const window = await this.current(signal),
+  private async capture(signal: AbortSignal, search = false): Promise<Capture> {
+    const window = await this.current(signal, search),
       bounds = BoundsSchema.parse(window.bounds)
     if (bounds.width < 500 || bounds.height < 400) throw new Error('window_too_small')
     const token = hashContext(window)
     const pixels = this.screenPixels(bounds)
-    const after = await this.current(signal)
+    const after = await this.current(signal, search)
     if (hashContext(after) !== token) throw new Error('window_changed')
     return { window, token, pixels, bounds }
   }
@@ -347,6 +375,8 @@ export class ForegroundWechatDriver implements ForegroundDriver {
   ): Promise<unknown> {
     const config = this.configuration()
     if (!config.vision.capabilities.includes('vision')) throw new Error('vision_not_configured')
+    if (prompt.startsWith('读取微信左侧普通聊天会话列表'))
+      prompt += `\n当前关注的精确备注名包括 ${JSON.stringify(this.target)}，仅供逐字校对；仍须读取截图实际字形，不得把其他相似名字改成这个名字。`
     if (prompt.startsWith('读取当前实际打开的聊天') && this.acceptedEvidence)
       prompt +=
         '\n上次核对通过的气泡原文仅供逐字校对（仍须以当前截图为准，已不可见的不能照抄；不要改动原标点、空格或合并气泡）：' +
@@ -381,9 +411,10 @@ export class ForegroundWechatDriver implements ForegroundDriver {
   private async click(
     capture: Capture,
     xy: z.infer<typeof point>,
-    signal: AbortSignal
+    signal: AbortSignal,
+    search = false
   ): Promise<void> {
-    const current = await this.current(signal)
+    const current = await this.current(signal, search)
     if (hashContext(current) !== capture.token) throw new Error('window_changed')
     const robot = getRobot()
     if (!robot) throw new Error('desktop_input_unavailable')
@@ -392,6 +423,9 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       Math.round(capture.bounds.y + capture.bounds.height * xy[1])
     )
     robot.mouseClick('left')
+    // Keep pointer highlights and hover chrome outside the verified chat.
+    // Moving the pointer does not change the editor's keyboard focus.
+    robot.moveMouse(capture.bounds.x + 20, capture.bounds.y + 20)
   }
   async connect(
     target: string,
@@ -404,9 +438,7 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     const config = this.configuration()
     if (!config.vision.apiKey || !config.reply.apiKey) throw new Error('model_not_configured')
     if (!config.rules.trim()) throw new Error('rules_not_configured')
-    const windows = (await this.windows.inspect(signal)).windows.filter((w) =>
-      /\\(?:Weixin|WeChat)\.exe$/i.test(w.path)
-    )
+    const windows = this.chatWindows((await this.windows.inspect(signal)).windows)
     if (windows.length !== 1) throw new Error('wechat_window_unavailable')
     const window = windows[0]
     this.bound = {
@@ -424,6 +456,8 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     this.listEvidence = undefined
     this.listShape = undefined
     this.listCache.clear()
+    this.listRowsPixels = []
+    this.listScrollProof = undefined
     if (focus) {
       await this.windows.focus(window, signal)
       await wait(400, signal)
@@ -447,6 +481,40 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       await this.current(signal)
       return
     }
+    const result = await this.findContact(target, signal)
+    await this.click(result.capture, result.point, signal, true)
+    await wait(500, signal)
+  }
+  async verifyListName(target: string, signal: AbortSignal): Promise<boolean> {
+    let unique = true
+    let failure: unknown
+    try {
+      await this.findContact(target, signal)
+    } catch (error) {
+      if (error instanceof Error && error.message === 'contact_not_unique') unique = false
+      else failure = error
+    }
+    if (!signal.aborted) {
+      const robot = getRobot()
+      if (!robot) throw new Error('desktop_input_unavailable')
+      // Leave search without opening a result or consuming its unread messages.
+      // WeChat 4 first clears the query and can show an empty network popup;
+      // the second Escape releases search focus and closes that surface.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await this.current(signal, true)
+        robot.keyTap('escape')
+        await wait(200, signal)
+      }
+      await this.current(signal)
+    }
+    if (failure) throw failure
+    if (signal.aborted) throw new Error('cancelled')
+    return unique
+  }
+  private async findContact(
+    target: string,
+    signal: AbortSignal
+  ): Promise<{ capture: Capture; point: z.infer<typeof point> }> {
     const capture = await this.capture(signal)
     const result = z
       .strictObject({ search: point, loggedIn: z.boolean() })
@@ -461,27 +529,28 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     await this.click(capture, result.search, signal)
     const robot = getRobot()
     if (!robot) throw new Error('desktop_input_unavailable')
-    await this.current(signal)
+    await this.current(signal, true)
     robot.keyTap('a', ['control'])
-    await this.windows.typeText(await this.current(signal), target, signal)
+    const type = this.windows.typeSearch ?? this.windows.typeText
+    await type.call(this.windows, await this.current(signal, true), target, signal)
     await wait(800, signal)
-    const searchCapture = await this.capture(signal)
+    const searchCapture = await this.capture(signal, true)
     const matches = SearchSchema.parse(
       await this.vision(
         searchCapture,
-        `读取左侧微信搜索结果中名字严格等于 ${JSON.stringify(target)} 的联系人。只返回这些结果，不能从聊天正文推测。每项提供 name、privateChat（只有单人联系人为 true）、point（结果行中心的整图 0..1 坐标）。返回 {"matches":[...],"hasMore":false}。如果结果尚未加载、结果不完整、有隐藏的同名结果或不能确定唯一性，hasMore=true。`,
+        `只读取左侧搜索下拉框的本地联系人结果：名字严格等于 ${JSON.stringify(target)}。可包含“最常使用”“联系人”分区中带头像的单人结果；排除搜索输入框、右侧聊天、搜索网络结果、放大镜搜索建议、聊天记录、公众号和群。每项提供 name、privateChat（只有单人联系人为 true）、point（结果行中心的整图 0..1 坐标）。返回 {"matches":[...],"hasMore":false}。hasMore仅判断本地联系人区域：存在正在加载、裁切、可滚动的未展示本地联系人、展开更多本地联系人的按钮时为true；本地区域结束且所有本地结果均完整可见时为false。下方网络搜索建议不属于联系人区域，它们是否有更多或加载中不影响hasMore。不得假设截图之外存在结果，也不得忽略实际可见的本地更多入口。`,
         signal
       )
     )
+    if (matches.hasMore) throw new Error('list_incomplete')
     if (
-      matches.hasMore ||
       matches.matches.length !== 1 ||
       matches.matches[0].name !== target ||
-      !matches.matches[0].privateChat
+      !matches.matches[0].privateChat ||
+      matches.matches[0].point[0] >= 0.55
     )
       throw new Error('contact_not_unique')
-    await this.click(searchCapture, matches.matches[0].point, signal)
-    await wait(500, signal)
+    return { capture: searchCapture, point: matches.matches[0].point }
   }
   async listPage(signal: AbortSignal): Promise<ListPage> {
     this.listEvidence = undefined
@@ -491,13 +560,9 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       const key = hashContext([capture.token, this.configuration().revision, fingerprint])
       const cached = this.listCache.get(key)
       if (cached) {
-        this.listEvidence = { capture, visual: cached, fingerprint }
-        return {
-          rows: cached.rows,
-          atTop: cached.atTop,
-          atBottom: cached.atBottom,
-          currentContact: cached.currentContact
-        }
+        this.listRowsPixels = cached.templates
+        this.listEvidence = { capture, visual: cached.visual, fingerprint }
+        return this.listResult(capture, cached.visual)
       }
     }
     const visual = ListVisualSchema.parse(
@@ -516,6 +581,12 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     )
       throw new Error('list_incomplete')
     if (visual.inputText.trim()) throw new Error('human_input')
+    this.listRowsPixels = listRowPixels(
+      capture.pixels,
+      visual.list,
+      visual.rows,
+      this.listRowsPixels
+    )
     const edges = listScrollEdges(capture.pixels, visual.list)
     if (edges) Object.assign(visual, edges)
     const [x, y, w, h] = visual.list
@@ -533,8 +604,14 @@ export class ForegroundWechatDriver implements ForegroundDriver {
           badge[0] >= row.point[0] ||
           Math.abs(badge[1] + badge[3] / 2 - row.point[1]) > 0.05 ||
           unreadBadge(capture.pixels, badge) !== 'dot'
-        )
-          throw new Error('visual_response_invalid')
+        ) {
+          // An unread mark belongs to this row. Never infer its count or stop
+          // unrelated recipients because one badge cannot be independently read.
+          row.unread = null
+          row.unreadDot = false
+          delete row.badge
+          continue
+        }
         row.unread = null
       }
     }
@@ -546,15 +623,35 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     this.listShape = visual
     this.listCache.set(
       hashContext([capture.token, this.configuration().revision, this.listEvidence.fingerprint]),
-      visual
+      { visual, templates: this.listRowsPixels }
     )
     if (this.listCache.size > 256) this.listCache.delete(this.listCache.keys().next().value!)
+    return this.listResult(capture, visual)
+  }
+  private listResult(capture: Capture, visual: z.infer<typeof ListVisualSchema>): ListPage {
+    const proof = this.listScrollProof
+    const unchanged =
+      proof &&
+      proof.token === capture.token &&
+      proof.revision === this.configuration().revision &&
+      proof.fingerprint === this.listPixels(capture, { list: proof.area })
+    if (!unchanged) this.listScrollProof = undefined
     return {
       rows: visual.rows,
-      atBottom: visual.atBottom,
-      atTop: visual.atTop,
+      atTop: Boolean(visual.atTop || (unchanged && proof.up && proof.attempts >= 2)),
+      atBottom: Boolean(visual.atBottom || (unchanged && !proof.up && proof.attempts >= 2)),
       currentContact: visual.currentContact
     }
+  }
+  private listPixels(
+    capture: Capture,
+    visual: Pick<z.infer<typeof ListVisualSchema>, 'list'>
+  ): string {
+    return this.fingerprint(capture.pixels, {
+      header: visual.list,
+      history: visual.list,
+      input: visual.list
+    })
   }
   async showChatList(signal: AbortSignal): Promise<void> {
     const resultSchema = z.strictObject({
@@ -608,19 +705,28 @@ export class ForegroundWechatDriver implements ForegroundDriver {
   ): Promise<void> {
     const evidence = this.listEvidence
     if (!evidence) throw new Error('list_changed')
-    const current = await this.current(signal)
-    if (hashContext(current) !== evidence.capture.token) throw new Error('window_changed')
-    if (
-      this.listFingerprint(this.screenPixels(evidence.capture.bounds), evidence.visual) !==
-      evidence.fingerprint
-    )
-      throw new Error('list_changed')
+    for (let attempt = 0; ; attempt++) {
+      const current = await this.current(signal)
+      if (hashContext(current) !== evidence.capture.token) throw new Error('window_changed')
+      if (
+        this.listFingerprint(this.screenPixels(evidence.capture.bounds), evidence.visual) ===
+        evidence.fingerprint
+      )
+        break
+      if (attempt >= 12) throw new Error('list_changed')
+      // A caret or hover animation may settle back to the exact verified frame.
+      // A genuinely changed row/draft never authorizes navigation.
+      await wait(100, signal)
+    }
     if (signal.aborted) throw new Error('cancelled')
     action(evidence.capture, evidence.visual)
+    const robot = getRobot()
+    if (robot) robot.moveMouse(evidence.capture.bounds.x + 20, evidence.capture.bounds.y + 20)
     this.listEvidence = undefined
     await wait(350, signal)
   }
   async listScroll(up: boolean, signal: AbortSignal): Promise<void> {
+    const evidence = this.listEvidence
     await this.listAction(signal, (capture, visual) => {
       const robot = getRobot()
       if (!robot) throw new Error('desktop_input_unavailable')
@@ -629,9 +735,29 @@ export class ForegroundWechatDriver implements ForegroundDriver {
         Math.round(capture.bounds.x + (x + w * 0.7) * capture.bounds.width),
         Math.round(capture.bounds.y + (y + h * 0.5) * capture.bounds.height)
       )
-      // Small downward steps preserve overlapping rows. A top reset is confirmed by rereading.
-      robot.scrollMouse(0, up ? 12000 : -120)
+      // Keep several overlapping rows while avoiding one model read per wheel notch.
+      // Small windows retain a single notch; larger lists can advance farther.
+      const notches = Math.max(1, Math.min(6, Math.floor((h * capture.bounds.height) / 150)))
+      robot.scrollMouse(0, up ? 12000 : -120 * notches)
     })
+    if (evidence) {
+      const revision = this.configuration().revision,
+        previous = this.listScrollProof
+      const same =
+        previous?.token === evidence.capture.token &&
+        previous.revision === revision &&
+        previous.up === up &&
+        previous.fingerprint === this.listPixels(evidence.capture, { list: previous.area })
+      const proofArea = same ? previous.area : evidence.visual.list
+      this.listScrollProof = {
+        token: evidence.capture.token,
+        revision,
+        fingerprint: this.listPixels(evidence.capture, { list: proofArea }),
+        area: proofArea,
+        up,
+        attempts: same ? previous.attempts + 1 : 1
+      }
+    }
   }
   async listOpen(row: ListRow, signal: AbortSignal): Promise<void> {
     if (!this.listEvidence?.visual.rows.some((value) => hashContext(value) === hashContext(row)))
@@ -850,6 +976,7 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     if (visual.messages.some((message) => message.direction === 'system')) return undefined
     const bubbles = textBubbles(capture.pixels, this.bodyArea(visual))
     if (!bubbles.length || bubbles.length > 80) return undefined
+    if (hasUnpairedChatAvatars(capture.pixels, this.bodyArea(visual), bubbles)) return undefined
     if (previous?.bubbles) {
       const counts = (values: TextBubble[]): string =>
         hashContext(
@@ -1040,7 +1167,14 @@ export class ForegroundWechatDriver implements ForegroundDriver {
         !fresh && cached && Date.now() - cached.at < 30000
           ? structuredClone(cached.visual)
           : onlyInputChanged
-            ? await this.readInput(capture, previous, signal)
+            ? await (() => {
+                // The history/header and these exact input pixels are already verified.
+                // Match the local-bubble path without bypassing fresh receipt reads.
+                const input = this.inputCache.get(this.inputKey(capture, previous.visual))
+                return input
+                  ? { ...previous.visual, inputText: input.text }
+                  : this.readInput(capture, previous, signal)
+              })()
             : VisualChatSchema.parse(
                 withEditor(
                   await this.vision(
@@ -1296,7 +1430,7 @@ export class ForegroundWechatDriver implements ForegroundDriver {
         return failed('send_screen_changed')
       }
       const [x, y, w, h] = evidence.visual.input
-      await this.click(fresh, [x + w * 0.3, y + h * 0.4], signal)
+      await this.click(fresh, [x + w * 0.3, y + h * 0.6], signal)
       await wait(100, signal)
       const focused = await this.capture(signal)
       const context = { ...evidence.visual, input: evidence.visual.history }
@@ -1512,8 +1646,8 @@ export class ForegroundWechatDriver implements ForegroundDriver {
     let stage: NonNullable<ForegroundDispatchFailure['failureStage']> = 'before_input'
     try {
       const config = this.configuration(),
-        store = config.stickerStore,
-        evidence = this.evidence
+        store = config.stickerStore
+      let evidence = this.evidence
       if (
         !store ||
         !this.windows.pasteImage ||
@@ -1526,21 +1660,35 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       )
         throw new Error('send_context_invalid')
       const asset = await store.load(part.assetId)
-      const before = await this.capture(signal)
+      let before = await this.capture(signal)
+      for (
+        let attempt = 0;
+        attempt < 12 &&
+        before.token === evidence.capture.token &&
+        this.fingerprint(before.pixels, evidence.visual) !== evidence.fingerprint;
+        attempt++
+      ) {
+        await wait(100, signal)
+        before = await this.capture(signal)
+      }
       if (
         before.token !== evidence.capture.token ||
         this.fingerprint(before.pixels, evidence.visual) !== evidence.fingerprint
       )
         throw new Error('send_screen_changed')
       const [x, y, w, h] = evidence.visual.input
-      await this.click(before, [x + w * 0.3, y + h * 0.4], signal)
+      await this.click(before, [x + w * 0.3, y + h * 0.6], signal)
       const focused = await this.read(signal)
       if (
         focused.inputText ||
         !sameForegroundMessages(focused.messages, observation.messages) ||
-        focused.contact !== this.target
+        focused.contact !== this.target ||
+        !focused.privateChat ||
+        focused.windowToken !== observation.windowToken ||
+        focused.revision !== observation.revision
       )
         throw new Error('send_context_changed')
+      evidence = this.evidence!
       stage = 'input'
       await this.windows.pasteImage(await this.current(signal), asset.dib, signal)
       stage = 'draft_validation'
@@ -1572,23 +1720,69 @@ export class ForegroundWechatDriver implements ForegroundDriver {
       )
         throw new Error('send_image_draft_unverified')
       const context = { ...evidence.visual, input: evidence.visual.history }
+      let draftVisual = evidence.visual
       if (
         this.fingerprint(draft.pixels, context) !==
         this.fingerprint(evidence.capture.pixels, context)
-      )
-        throw new Error('send_context_changed')
+      ) {
+        const left = Math.min(
+            evidence.visual.header[0],
+            evidence.visual.history[0],
+            evidence.visual.input[0]
+          ),
+          divider = chatInputTop(draft.pixels, left, evidence.visual.input[1])
+        if (
+          draft.token !== evidence.capture.token ||
+          !this.sameHeader(draft, evidence) ||
+          divider === undefined ||
+          divider >= evidence.visual.input[1] ||
+          evidence.visual.input[1] - divider > 0.25
+        )
+          throw new Error('send_context_changed')
+        // A pasted image expands WeChat's editor and clips older history. Read
+        // the remaining messages independently and require an exact suffix of
+        // the original conversation, with no new incoming or outgoing message.
+        const reanchored = await this.read(signal, true),
+          current = this.evidence!,
+          count = reanchored.messages.length,
+          stable = { ...current.visual, input: current.visual.history }
+        if (
+          reanchored.windowToken !== observation.windowToken ||
+          reanchored.contact !== this.target ||
+          !reanchored.privateChat ||
+          reanchored.inputText ||
+          reanchored.revision !== observation.revision ||
+          !count ||
+          count > observation.messages.length ||
+          !(await this.verifyReceiptHistory(observation, reanchored, count, evidence, signal)) ||
+          this.fingerprint(draft.pixels, stable) !==
+            this.fingerprint(current.capture.pixels, stable)
+        )
+          throw new Error('send_context_changed')
+        draftVisual = current.visual
+      }
       stage = 'before_enter'
-      const ready = await this.current(signal),
-        robot = getRobot()
-      if (
-        !robot ||
-        hashContext(ready) !== draft.token ||
-        signal.aborted ||
-        this.configuration().revision !== observation.revision ||
-        createHash('sha256').update(this.screenPixels(draft.bounds).data).digest('hex') !==
-          createHash('sha256').update(draft.pixels.data).digest('hex')
-      )
-        throw new Error('send_screen_changed')
+      const robot = getRobot(),
+        fingerprint = this.fingerprint(draft.pixels, draftVisual)
+      let stableDraft = false
+      for (let attempt = 0; attempt < 13; attempt++) {
+        const ready = await this.current(signal)
+        if (
+          !robot ||
+          hashContext(ready) !== draft.token ||
+          signal.aborted ||
+          this.configuration().revision !== observation.revision
+        )
+          throw new Error('send_screen_changed')
+        // An unrelated unread badge can change the left list. The complete
+        // verified chat and image draft must still match exactly before Enter.
+        if (this.fingerprint(this.screenPixels(draft.bounds), draftVisual) === fingerprint) {
+          stableDraft = true
+          break
+        }
+        if (attempt < 12) await wait(100, signal)
+      }
+      if (!stableDraft) throw new Error('send_screen_changed')
       const historyArea = evidence.visual.history
       this.pendingImage = {
         observation,
@@ -1603,7 +1797,7 @@ export class ForegroundWechatDriver implements ForegroundDriver {
         before: { ...evidence.capture.pixels, data: Buffer.from(evidence.capture.pixels.data) }
       }
       entered = true
-      robot.keyTap('enter')
+      robot!.keyTap('enter')
       return await this.checkImageReceipt(signal)
     } catch (error) {
       this.lastFailure = {

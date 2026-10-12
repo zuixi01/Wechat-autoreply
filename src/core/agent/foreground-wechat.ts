@@ -220,6 +220,15 @@ export class ForegroundWechatRuntime {
       ])
     const baseline = ForegroundObservationSchema.parse(await this.driver.read(signal))
     if (signal.aborted) return
+    if (restored && baseline.windowToken !== restored.baseline.windowToken) {
+      // An explicit restart binds and reads the current native window afresh.
+      // Carry message progress across relogin only after proving the same
+      // conversation boundary; live window changes still fail validate().
+      this.validate({ ...baseline, windowToken: restored.baseline.windowToken })
+      if (!restored.baseline.messages.length) throw new Error('message_gap')
+      this.additions(baseline)
+      this.baseline = { ...restored.baseline, windowToken: baseline.windowToken }
+    }
     this.validate(baseline)
     this.driver.accept?.(baseline)
     if (!restored) {

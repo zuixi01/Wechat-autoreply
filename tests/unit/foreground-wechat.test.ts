@@ -54,6 +54,38 @@ function fixture(polling = false) {
   }
 }
 describe('project-owned foreground WeChat runtime', () => {
+  it('resumes saved progress after an explicit reconnect to a new window with continuous history', async () => {
+    const f = fixture()
+    const saved = { baseline: observation([msg('已处理的问题')]), pending: false }
+    const next = {
+      ...observation([msg('已处理的问题'), msg('重登后新问题')]),
+      windowToken: 'instance-2'
+    }
+    f.set(next)
+    await f.runtime.start('Q', 'current_chat', undefined, saved)
+    expect(f.runtime.status().state).toBe('running')
+    await f.runtime.tick()
+    expect(f.records.filter((row) => row.state === 'sent').map((row) => row.question)).toEqual([
+      '重登后新问题'
+    ])
+    expect(f.checkpoint.mock.calls.at(-1)![0].baseline.windowToken).toBe('instance-2')
+    await f.runtime.tick()
+    expect(f.driver.dispatch).toHaveBeenCalledTimes(1)
+    await f.runtime.pause()
+  })
+  it('refuses to rebind saved progress when the new window cannot prove history continuity', async () => {
+    const f = fixture()
+    f.set({ ...observation([msg('另一段历史')]), windowToken: 'instance-2' })
+    await f.runtime.start('Q', 'current_chat', undefined, {
+      baseline: observation(),
+      pending: true
+    })
+    expect(f.runtime.status()).toMatchObject({ reason: 'message_gap' })
+    expect(f.driver.generate).not.toHaveBeenCalled()
+    expect(f.driver.dispatch).not.toHaveBeenCalled()
+    expect(f.checkpoint).not.toHaveBeenCalled()
+    await f.runtime.pause()
+  })
   it('uses a verified dot for the latest preview and hands off older ambiguous incoming text', async () => {
     const f = fixture()
     f.set(observation([msg('旧问题'), msg('旧回复', 'outbound'), msg('新问题'), msg('补充新问题')]))

@@ -6,6 +6,8 @@ import { z } from 'zod'
 const f = vi.hoisted(() => ({
   active: 71,
   occluded: false,
+  searchOccluded: undefined as boolean | undefined,
+  searchTyping: false,
   revision: 'rules-1',
   png: Buffer.alloc(0) as Buffer<ArrayBufferLike>,
   tap: vi.fn(),
@@ -15,7 +17,8 @@ const f = vi.hoisted(() => ({
   click: vi.fn(),
   scroll: vi.fn(),
   fetch: vi.fn(),
-  inspectEffect: undefined as undefined | (() => void)
+  inspectEffect: undefined as undefined | (() => void),
+  extraWindows: [] as (typeof nativeWindow)[]
 }))
 function changeScreen(x = 400, y = 200): void {
   const png = PNG.sync.read(f.png)
@@ -36,9 +39,10 @@ const windows = {
     return {
       id: '00000000-0000-4000-8000-000000000000',
       ok: true as const,
-      windows: [nativeWindow],
+      windows: [nativeWindow, ...f.extraWindows],
       foreground: String(f.active),
-      occluded: f.occluded
+      occluded: f.occluded,
+      searchOccluded: f.searchOccluded
     }
   },
   focus: async () => {
@@ -47,7 +51,18 @@ const windows = {
   typeText: async (binding: typeof nativeWindow, text: string, signal: AbortSignal) => {
     if (signal.aborted || String(f.active) !== binding.id) throw new Error('foreground_lost')
     changeScreen(400, 470)
+    if (f.searchTyping) {
+      f.occluded = true
+      f.searchOccluded = false
+    }
     return f.type(text) as void | string
+  },
+  typeSearch: async (_binding: typeof nativeWindow, text: string) => {
+    if (f.searchTyping) {
+      f.occluded = true
+      f.searchOccluded = false
+    }
+    return f.type(text) as string
   },
   readEditorText: async () => f.readEditor() as Promise<string>
 }
@@ -151,8 +166,11 @@ beforeEach(async () => {
   vi.resetAllMocks()
   f.active = 71
   f.occluded = false
+  f.searchOccluded = undefined
+  f.searchTyping = false
   f.revision = 'rules-1'
   f.inspectEffect = undefined
+  f.extraWindows = []
   f.readEditor.mockResolvedValue('')
   nativeWindow.bounds = { x: 0, y: 0, width: 800, height: 600 }
   f.png = await new Jimp({ width: 800, height: 600, color: 0xffffffff }).getBuffer('image/png')
@@ -190,7 +208,81 @@ async function connected() {
   return { driver, signal, observation }
 }
 describe('project foreground sender boundaries', () => {
-  it.each(['confirmed', 'unverified', 'unchanged_history', 'incoming_only'])(
+  it('does not keep polling the model for an unchanged media chat after cache expiry', async () => {
+    const driver = new ForegroundWechatDriver(
+        () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+        windows
+      ),
+      signal = controller().signal
+    await advance(driver.connect('Q', signal, 'current_chat'))
+    f.fetch.mockResolvedValueOnce(
+      response(visual('', [{ direction: 'system', text: '[非文本消息]' }]))
+    )
+    const first = await advance(driver.read(signal))
+    driver.accept(first)
+    const calls = f.fetch.mock.calls.length
+    vi.setSystemTime(Date.now() + 31000)
+    f.fetch.mockResolvedValueOnce(response({ inputText: '' }))
+    expect(await advance(driver.read(signal))).toEqual(first)
+    expect(f.fetch).toHaveBeenCalledTimes(calls)
+    f.fetch.mockReset()
+    changeScreen(500, 250)
+    const changed = visual('', [
+      { direction: 'system', text: '[非文本消息]' },
+      { direction: 'inbound', text: '新问题' }
+    ])
+    f.fetch.mockResolvedValueOnce(response(changed))
+    expect((await advance(driver.read(signal))).messages).toEqual(changed.messages)
+    expect(f.fetch).toHaveBeenCalledTimes(1)
+    f.revision = 'updated-rules'
+    f.fetch.mockResolvedValueOnce(response(changed))
+    expect((await advance(driver.read(signal))).revision).toBe('updated-rules')
+    expect(f.fetch).toHaveBeenCalledTimes(2)
+  })
+  it('keeps media received together with a new text instead of silently dropping it', async () => {
+    const draw = (y: number, text: boolean): void => {
+      const image = PNG.sync.read(f.png)
+      for (let row = y; row < y + 40; row++)
+        for (let x = 342; x < 382; x++) image.data.set([80, 100, 180, 255], (row * 800 + x) * 4)
+      for (let row = y; row < y + 44; row++)
+        for (let x = 400; x < 550; x++)
+          image.data.set(text ? [236, 236, 238, 255] : [180, 100, 70, 255], (row * 800 + x) * 4)
+      if (text)
+        for (let dx = 0; dx < 8; dx++)
+          for (let row = y + 22 - dx; row <= y + 22 + dx; row++)
+            image.data.set([236, 236, 238, 255], (row * 800 + 392 + dx) * 4)
+      f.png = PNG.sync.write(image)
+    }
+    draw(160, true)
+    const driver = new ForegroundWechatDriver(
+        () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+        windows
+      ),
+      signal = controller().signal
+    await advance(driver.connect('Q', signal, 'current_chat'))
+    f.fetch.mockResolvedValueOnce(response(visual('', [{ direction: 'inbound', text: '旧消息' }])))
+    driver.accept(await driver.read(signal))
+    draw(230, false)
+    draw(310, true)
+    const messages = [
+      { direction: 'inbound', text: '旧消息' },
+      { direction: 'system', text: '[非文本消息]' },
+      { direction: 'inbound', text: '新消息' }
+    ]
+    f.fetch.mockImplementationOnce(async (_url, request) => {
+      const prompt = JSON.parse(request.body).messages[1].content[0].text
+      return response(
+        prompt.includes('读取当前实际打开的聊天')
+          ? visual('', messages)
+          : { text: '新消息', inputText: '' }
+      )
+    })
+    const next = await driver.read(signal)
+    expect(next.messages.map(({ direction, text }) => ({ direction, text }))).toEqual(messages)
+    expect(f.tap).not.toHaveBeenCalled()
+    expect(f.type).not.toHaveBeenCalled()
+  })
+  it.each(['confirmed', 'unverified', 'unchanged_history', 'incoming_only', 'unrelated_unread'])(
     'sends an image only after draft and receipt verification: %s',
     async (receiptCase) => {
       const verifiedReceipt = receiptCase !== 'unverified'
@@ -227,8 +319,9 @@ describe('project foreground sender boundaries', () => {
       )
       const before = await advance(driver.read(signal))
       f.fetch
-        .mockResolvedValueOnce(
-          response({
+        .mockImplementationOnce(async () => {
+          if (receiptCase === 'unrelated_unread') changeScreen(100, 150)
+          return response({
             contact: 'Q',
             privateChat: true,
             matchingDraft: true,
@@ -236,7 +329,7 @@ describe('project foreground sender boundaries', () => {
             draftTextEmpty: true,
             overlay: false
           })
-        )
+        })
         .mockResolvedValueOnce(
           response(
             visual(
@@ -255,16 +348,18 @@ describe('project foreground sender boundaries', () => {
             contact: 'Q',
             privateChat: true,
             latestOutboundMatches: verifiedReceipt,
-            newOutboundMatches: receiptCase === 'confirmed',
+            newOutboundMatches: ['confirmed', 'unrelated_unread'].includes(receiptCase),
             editorEmpty: true,
             outboundImageCount: 1
           })
         )
       expect(await advance(driver.dispatchImage(before, { kind: 'image', assetId }, signal))).toBe(
-        receiptCase === 'confirmed' ? 'sent' : 'unknown'
+        ['confirmed', 'unrelated_unread'].includes(receiptCase) ? 'sent' : 'unknown'
       )
       expect(f.tap.mock.calls).toEqual([['enter']])
-      expect(sent).toHaveBeenCalledTimes(receiptCase === 'confirmed' ? 1 : 0)
+      expect(sent).toHaveBeenCalledTimes(
+        ['confirmed', 'unrelated_unread'].includes(receiptCase) ? 1 : 0
+      )
     }
   )
   it('never sends an image when the pasted preview belongs to another conversation', async () => {
@@ -311,6 +406,98 @@ describe('project foreground sender boundaries', () => {
     ).toBe('not_sent')
     expect(f.tap).not.toHaveBeenCalled()
   })
+  it.each([false, true])(
+    'reanchors an expanded image editor and rejects intervening new input: %s',
+    async (newInput) => {
+      const png = await new Jimp({ width: 32, height: 32, color: 0xffcc00ff }).getBuffer(
+        'image/png'
+      )
+      const original = PNG.sync.read(f.png)
+      for (let x = 320; x < 800; x++) original.data.set([230, 230, 230, 255], (450 * 800 + x) * 4)
+      f.png = PNG.sync.write(original)
+      const driver = new ForegroundWechatDriver(
+        () => ({
+          vision: model,
+          reply: model,
+          rules: '回复',
+          revision: f.revision,
+          stickerStore: {
+            load: async () => ({ png, dib: Buffer.alloc(44) }),
+            sent: vi.fn()
+          } as unknown as PersonalStickerStore
+        }),
+        {
+          ...windows,
+          pasteImage: async () => {
+            const resized = PNG.sync.read(f.png)
+            for (let x = 320; x < 800; x++) {
+              resized.data.set([255, 255, 255, 255], (450 * 800 + x) * 4)
+              resized.data.set([230, 230, 230, 255], (390 * 800 + x) * 4)
+            }
+            resized.data.set([20, 20, 20, 255], (300 * 800 + 500) * 4)
+            f.png = PNG.sync.write(resized)
+          }
+        }
+      )
+      const signal = controller().signal
+      await advance(driver.connect('Q', signal, 'current_chat'))
+      f.fetch.mockResolvedValueOnce(response(visual()))
+      const before = await advance(driver.read(signal))
+      f.fetch
+        .mockResolvedValueOnce(
+          response({
+            contact: 'Q',
+            privateChat: true,
+            matchingDraft: true,
+            draftImageCount: 1,
+            draftTextEmpty: true,
+            overlay: false
+          })
+        )
+        .mockResolvedValueOnce(
+          response({
+            ...visual(
+              '',
+              newInput
+                ? [
+                    { direction: 'inbound', text: '问题' },
+                    { direction: 'inbound', text: '先别发表情了' }
+                  ]
+                : [{ direction: 'inbound', text: '问题' }]
+            ),
+            input: [0.4, 0.65, 0.5, 0.25]
+          })
+        )
+        .mockResolvedValueOnce(
+          response(
+            visual('', [
+              { direction: 'inbound', text: '问题' },
+              { direction: 'system', text: '[非文本消息]' }
+            ])
+          )
+        )
+        .mockResolvedValueOnce(
+          response({
+            contact: 'Q',
+            privateChat: true,
+            latestOutboundMatches: true,
+            newOutboundMatches: true,
+            editorEmpty: true,
+            outboundImageCount: 1
+          })
+        )
+      expect(
+        await advance(
+          driver.dispatchImage(
+            before,
+            { kind: 'image', assetId: '00000000-0000-4000-8000-000000000001' },
+            signal
+          )
+        )
+      ).toBe(newInput ? 'not_sent' : 'sent')
+      expect(f.tap.mock.calls).toEqual(newInput ? [] : [['enter']])
+    }
+  )
   it('waits without vision requests or input while a notification covers the foreground chat', async () => {
     const t = await connected()
     const calls = f.fetch.mock.calls.length
@@ -971,6 +1158,32 @@ describe('project foreground sender boundaries', () => {
     expect(f.click).not.toHaveBeenCalled()
     expect(f.fetch).not.toHaveBeenCalled()
   })
+  it('keeps the visible chat binding when a separate small already-logged-in window exists', async () => {
+    f.extraWindows = [
+      { ...nativeWindow, id: '72', pid: 124, bounds: { x: 900, y: 300, width: 352, height: 476 } }
+    ]
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows
+    )
+    await advance(driver.connect('Q', controller().signal, 'current_chat'))
+    f.fetch.mockResolvedValueOnce(response(visual()))
+    expect((await advance(driver.read(controller().signal))).contact).toBe('Q')
+    f.active = 72
+    await expect(advance(driver.read(controller().signal))).rejects.toThrow('foreground_lost')
+    expect(f.type).not.toHaveBeenCalled()
+  })
+  it('still refuses to choose between two full-size WeChat windows', async () => {
+    f.extraWindows = [{ ...nativeWindow, id: '72', pid: 124 }]
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows
+    )
+    await expect(advance(driver.connect('Q', controller().signal, 'current_chat'))).rejects.toThrow(
+      'wechat_window_unavailable'
+    )
+    expect(f.click).not.toHaveBeenCalled()
+  })
   it('reports a network connection failure without exposing request data', async () => {
     const t = await connected()
     changeScreen()
@@ -1144,6 +1357,92 @@ describe('project foreground sender boundaries', () => {
     )
     expect(f.click).toHaveBeenCalledTimes(1)
   })
+  it('checks list-recipient uniqueness without opening a result or consuming unread messages', async () => {
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows
+    )
+    const signal = controller().signal
+    await advance(driver.connect('Q', signal, 'current_chat'))
+    const search = { search: [0.2, 0.1], loggedIn: true },
+      match = { name: 'Q', privateChat: true, point: [0.2, 0.25] }
+    f.fetch
+      .mockResolvedValueOnce(response(search))
+      .mockResolvedValueOnce(response({ matches: [match], hasMore: false }))
+    expect(await advance(driver.verifyListName('Q', signal))).toBe(true)
+    expect(f.click).toHaveBeenCalledTimes(1)
+    expect(f.tap).toHaveBeenLastCalledWith('escape')
+    f.fetch
+      .mockResolvedValueOnce(response(search))
+      .mockResolvedValueOnce(response({ matches: [match, match], hasMore: false }))
+    expect(await advance(driver.verifyListName('Q', signal))).toBe(false)
+    expect(f.click).toHaveBeenCalledTimes(2)
+    expect(f.tap.mock.calls.some(([key]) => key === 'enter')).toBe(false)
+  })
+  it('allows a verified owned search popup only while searching and closes it before normal reads', async () => {
+    f.searchTyping = true
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows
+    )
+    const signal = controller().signal
+    await advance(driver.connect('Q', signal, 'current_chat'))
+    f.type.mockReturnValue('Q')
+    f.tap.mockImplementation((key) => {
+      if (key === 'escape') {
+        f.occluded = false
+        f.searchOccluded = undefined
+      }
+    })
+    f.fetch
+      .mockResolvedValueOnce(response({ search: [0.2, 0.1], loggedIn: true }))
+      .mockResolvedValueOnce(
+        response({
+          matches: [{ name: 'Q', privateChat: true, point: [0.2, 0.25] }],
+          hasMore: false
+        })
+      )
+    expect(await advance(driver.verifyListName('Q', signal))).toBe(true)
+    expect(f.occluded).toBe(false)
+    // The same allowance must never bypass ordinary chat/editor protection.
+    f.occluded = true
+    f.searchOccluded = false
+    await expect(advance(driver.read(signal))).rejects.toThrow('screen_obscured')
+  })
+  it('does not interact with search when a foreign overlay blocks it, including cleanup', async () => {
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      {
+        ...windows,
+        typeSearch: async () => {
+          f.occluded = true
+          f.searchOccluded = true
+        }
+      }
+    )
+    const signal = controller().signal
+    await advance(driver.connect('Q', signal, 'current_chat'))
+    f.fetch.mockResolvedValueOnce(response({ search: [0.2, 0.1], loggedIn: true }))
+    await expect(advance(driver.verifyListName('Q', signal))).rejects.toThrow('screen_obscured')
+    expect(f.tap).toHaveBeenCalledTimes(1)
+    expect(f.tap).toHaveBeenCalledWith('a', ['control'])
+    expect(f.click).toHaveBeenCalledTimes(1)
+  })
+  it('does not mark a recipient duplicate when search has not finished loading', async () => {
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows
+    )
+    const signal = controller().signal
+    await advance(driver.connect('Q', signal, 'current_chat'))
+    f.fetch
+      .mockResolvedValueOnce(response({ search: [0.2, 0.1], loggedIn: true }))
+      .mockResolvedValueOnce(
+        response({ matches: [{ name: 'Q', privateChat: true, point: [0.2, 0.25] }], hasMore: true })
+      )
+    await expect(advance(driver.verifyListName('Q', signal))).rejects.toThrow('list_incomplete')
+    expect(f.tap).toHaveBeenLastCalledWith('escape')
+  })
   const listVisual = (inputText = '') => ({
     loggedIn: true,
     completeRows: true,
@@ -1166,11 +1465,12 @@ describe('project foreground sender boundaries', () => {
     const page = await advance(driver.listPage(signal))
     return { driver, signal, page }
   }
-  it('scrolls inside the verified left list with one Windows wheel notch', async () => {
+  it('scrolls inside the verified left list with bounded overlapping wheel steps', async () => {
     const t = await listed()
     await advance(t.driver.listScroll(false, t.signal))
-    expect(f.scroll).toHaveBeenCalledWith(0, -120)
+    expect(f.scroll).toHaveBeenCalledWith(0, -240)
     expect(f.move).toHaveBeenCalledWith(220, 300)
+    expect(f.move).toHaveBeenLastCalledWith(20, 20)
     expect(f.type).not.toHaveBeenCalled()
     expect(f.tap).not.toHaveBeenCalled()
   })
@@ -1183,6 +1483,31 @@ describe('project foreground sender boundaries', () => {
     f.fetch.mockResolvedValueOnce(response(listVisual()))
     await advance(t.driver.listPage(t.signal))
     expect(f.fetch).toHaveBeenCalledTimes(calls + 1)
+  })
+  it('proves a hidden scrollbar edge only after two unchanged controlled wheel actions', async () => {
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows
+    )
+    const signal = controller().signal
+    await advance(driver.connect('Q', signal, 'current_chat'))
+    f.fetch.mockResolvedValueOnce(response({ ...listVisual(), atTop: false, atBottom: false }))
+    expect((await advance(driver.listPage(signal))).atTop).toBe(false)
+    await advance(driver.listScroll(true, signal))
+    changeScreen(400, 470)
+    f.fetch.mockResolvedValueOnce(
+      response({ ...listVisual(), list: [0.1, 0.151, 0.25, 0.699], atTop: false, atBottom: false })
+    )
+    expect((await advance(driver.listPage(signal))).atTop).toBe(false)
+    await advance(driver.listScroll(true, signal))
+    expect((await advance(driver.listPage(signal))).atTop).toBe(true)
+    await advance(driver.listScroll(false, signal))
+    expect((await advance(driver.listPage(signal))).atBottom).toBe(false)
+    await advance(driver.listScroll(false, signal))
+    expect((await advance(driver.listPage(signal))).atBottom).toBe(true)
+    changeScreen(160, 150)
+    f.fetch.mockResolvedValueOnce(response({ ...listVisual(), atTop: false, atBottom: false }))
+    expect((await advance(driver.listPage(signal))).atBottom).toBe(false)
   })
   it('invalidates the list current-contact cache when only the right title changes', async () => {
     const t = await listed()
@@ -1219,7 +1544,7 @@ describe('project foreground sender boundaries', () => {
     expect(await t.driver.listPage(t.signal)).toEqual(next)
     expect(f.click).not.toHaveBeenCalled()
   })
-  it('rejects a model hallucination of a red dot on unchanged white pixels', async () => {
+  it('marks an unverified badge unknown without blocking other contacts on the page', async () => {
     const t = await listed()
     f.revision = 'new-rules'
     const list = listVisual()
@@ -1236,7 +1561,8 @@ describe('project foreground sender boundaries', () => {
         ]
       })
     )
-    await expect(t.driver.listPage(t.signal)).rejects.toThrow('visual_response_invalid')
+    const page = await advance(t.driver.listPage(t.signal))
+    expect(page.rows[0]).toMatchObject({ unread: null, unreadDot: false })
     expect(f.click).not.toHaveBeenCalled()
   })
   it('retries a single transient model connection failure without any desktop send action', async () => {
@@ -1277,6 +1603,17 @@ describe('project foreground sender boundaries', () => {
     f.png = await image.getBuffer('image/png')
     await expect(advance(t.driver.listScroll(false, t.signal))).rejects.toThrow('list_changed')
     expect(f.scroll).not.toHaveBeenCalled()
+  })
+  it('waits for exact list pixels to settle before navigation without accepting a changed row', async () => {
+    const t = await listed(),
+      original = Buffer.from(f.png)
+    changeScreen(400, 470)
+    setTimeout(() => {
+      f.png = original
+    }, 300)
+    await advance(t.driver.listScroll(false, t.signal))
+    expect(f.scroll).toHaveBeenCalledTimes(1)
+    expect(f.move).toHaveBeenLastCalledWith(20, 20)
   })
   it('does not navigate after cancellation during the final native check', async () => {
     const t = await listed(),

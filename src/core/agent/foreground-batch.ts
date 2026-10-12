@@ -33,6 +33,7 @@ const transient = new Set([
   'window_query_failed',
   'wechat_window_unavailable',
   'list_incomplete',
+  'list_changed',
   'list_unavailable'
 ])
 /** One physical desktop, one serialized work loop, independent per-contact history baselines. */
@@ -52,6 +53,8 @@ export class ForegroundBatchRuntime {
   private issues = new Map<string, string>()
   private sessions = new Map<string, ForegroundWechatRuntime>()
   private checkpoints = new Map<string, { row: ListRow; checkpoint?: ForegroundCheckpoint }>()
+  private resumeCheckpoints = new Map<string, ForegroundCheckpoint>()
+  private reconcile = new Set<string>()
   private knownRows: ListRow[] = []
   private lastScanAt = 0
   private queueTurns = 0
@@ -106,6 +109,15 @@ export class ForegroundBatchRuntime {
     this.checkpoints.clear()
     for (const value of this.store?.loadBatch(targets, true) ?? [])
       this.checkpoints.set(value.row.name, value)
+    this.resumeCheckpoints.clear()
+    this.reconcile = new Set(this.checkpoints.keys())
+    for (const target of targets) {
+      const checkpoint = this.store?.loadSingle?.(target)
+      if (checkpoint) {
+        this.resumeCheckpoints.set(target, checkpoint)
+        this.reconcile.add(target)
+      }
+    }
     this.sessions.clear()
     this.issues.clear()
     this.queue = []
@@ -237,7 +249,7 @@ export class ForegroundBatchRuntime {
             new Set(names).size !== names.length ||
             page.rows.some(
               (row) =>
-                !row.nameComplete ||
+                this.targets.some((name) => mayMatchTruncatedName(row, name)) ||
                 !this.knownRows.some((old) => old.name === row.name) ||
                 (this.targets.includes(row.name) &&
                   row.unread !== 0 &&
@@ -254,15 +266,31 @@ export class ForegroundBatchRuntime {
           rows = [...page.rows, ...this.knownRows.filter((old) => !names.includes(old.name))]
         } else rows = []
         if (!this.lastScanAt || Date.now() - this.lastScanAt >= 30000) {
-          rows = await scanForegroundList(this.navigator, signal, (pages, rows) => {
-            if (signal.aborted) return
-            this.pages = pages
-            this.discovered = rows.length
-          })
+          const verified = await this.navigator.inventory?.(this.targets, signal)
+          rows =
+            verified ??
+            (await scanForegroundList(this.navigator, signal, (pages, rows) => {
+              if (signal.aborted) return
+              this.pages = pages
+              this.discovered = rows.length
+            }))
+          if (verified) {
+            this.pages = 1
+            this.discovered = verified.length
+          }
           this.lastScanAt = Date.now()
         }
         this.knownRows = rows
         if (signal.aborted) return
+        // Opening a conversation clears its badge before we have necessarily
+        // answered it. Check persisted message progress once on every start.
+        for (const row of rows) {
+          const checkpoint = this.resumeCheckpoints.get(row.name)
+          if (checkpoint && row.nameComplete) {
+            this.checkpoints.set(row.name, { row, checkpoint })
+            this.resumeCheckpoints.delete(row.name)
+          }
+        }
         const names = new Map<string, number>()
         for (const row of rows)
           if (row.nameComplete) names.set(row.name, (names.get(row.name) ?? 0) + 1)
@@ -294,6 +322,7 @@ export class ForegroundBatchRuntime {
               (row.unread !== 0 ||
                 row.name === this.navigator.currentContact?.() ||
                 this.sessions.get(row.name)?.hasPending() ||
+                this.reconcile.has(row.name) ||
                 this.pendingCheckpoint(row.name))
           )
           .map((row) =>
@@ -386,6 +415,7 @@ export class ForegroundBatchRuntime {
         )
       }
       if (signal.aborted) return
+      this.reconcile.delete(row.name)
       await session.tick()
       if (signal.aborted) return
       const status = session.activity()
@@ -421,8 +451,7 @@ export class ForegroundBatchRuntime {
       if (code === 'list_changed') {
         this.queue = []
         this.complete = false
-        this.state = 'scanning'
-        this.reason = code
+        this.recover(code)
       } else this.recover(code)
     }
   }

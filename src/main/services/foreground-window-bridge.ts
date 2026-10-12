@@ -25,6 +25,7 @@ const StateSchema = z.strictObject({
   windows: z.array(ForegroundWindowSchema).max(16),
   foreground: z.string().regex(/^\d+$/),
   occluded: z.boolean().optional(),
+  searchOccluded: z.boolean().optional(),
   editorText: z.string().max(4096).nullable().optional()
 })
 export type ForegroundWindow = z.infer<typeof ForegroundWindowSchema>
@@ -32,6 +33,7 @@ export interface ForegroundWindows {
   inspect(signal: AbortSignal): Promise<z.infer<typeof StateSchema>>
   focus(binding: ForegroundWindow, signal: AbortSignal): Promise<void>
   typeText(binding: ForegroundWindow, text: string, signal: AbortSignal): Promise<void | string>
+  typeSearch?(binding: ForegroundWindow, text: string, signal: AbortSignal): Promise<void | string>
   readEditorText?(binding: ForegroundWindow, signal: AbortSignal): Promise<string>
   pasteImage?(binding: ForegroundWindow, dib: Buffer, signal: AbortSignal): Promise<void>
 }
@@ -70,6 +72,17 @@ export class ForegroundWindowBridge implements ForegroundWindows {
     await this.request('focus', signal, binding)
   }
   async typeText(binding: ForegroundWindow, text: string, signal: AbortSignal): Promise<string> {
+    return this.type('type', binding, text, signal)
+  }
+  async typeSearch(binding: ForegroundWindow, text: string, signal: AbortSignal): Promise<string> {
+    return this.type('type_search', binding, text, signal)
+  }
+  private async type(
+    command: 'type' | 'type_search',
+    binding: ForegroundWindow,
+    text: string,
+    signal: AbortSignal
+  ): Promise<string> {
     if (
       !text ||
       text.length > 4096 ||
@@ -79,7 +92,7 @@ export class ForegroundWindowBridge implements ForegroundWindows {
       Buffer.from(text, 'utf8').toString('utf8') !== text
     )
       throw new Error('text_invalid')
-    const response = await this.request('type', signal, binding, text)
+    const response = await this.request(command, signal, binding, text)
     if (typeof response.editorText !== 'string') throw new Error('editor_text_unavailable')
     return response.editorText
   }
@@ -94,7 +107,7 @@ export class ForegroundWindowBridge implements ForegroundWindows {
     await this.request('paste_image', signal, binding, dib.toString('base64'))
   }
   private request(
-    command: 'inspect' | 'focus' | 'type' | 'read_editor' | 'paste_image',
+    command: 'inspect' | 'focus' | 'type' | 'type_search' | 'read_editor' | 'paste_image',
     signal: AbortSignal,
     binding?: ForegroundWindow,
     text?: string
@@ -106,7 +119,7 @@ export class ForegroundWindowBridge implements ForegroundWindows {
     return work
   }
   private async exchange(
-    command: 'inspect' | 'focus' | 'type' | 'read_editor' | 'paste_image',
+    command: 'inspect' | 'focus' | 'type' | 'type_search' | 'read_editor' | 'paste_image',
     signal: AbortSignal,
     binding?: ForegroundWindow,
     text?: string
@@ -179,7 +192,10 @@ export class ForegroundWindowBridge implements ForegroundWindows {
       const abort = (): void => {
         // An active paste must finish restoring the clipboard. The helper cannot
         // press Enter; the runtime will discard its result after cancellation.
-        if (['type', 'read_editor', 'paste_image'].includes(command) && requestWritten)
+        if (
+          ['type', 'type_search', 'read_editor', 'paste_image'].includes(command) &&
+          requestWritten
+        )
           cancelledAfterWrite = true
         else finish(new Error('cancelled'))
       }

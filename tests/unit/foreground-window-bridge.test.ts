@@ -63,12 +63,37 @@ describe('persistent pinned foreground helper', () => {
       ok: true,
       windows: [],
       foreground: '71',
-      occluded: true
+      occluded: true,
+      searchOccluded: false
     })
     expect(await bridge().inspect(new AbortController().signal)).toMatchObject({
       occluded: true,
+      searchOccluded: false,
       foreground: '71'
     })
+  })
+  it('uses an explicit search command without weakening ordinary editor commands', async () => {
+    const value = bridge(),
+      signal = new AbortController().signal
+    const binding = {
+      id: '71',
+      pid: 123,
+      path: 'C:/Weixin.exe',
+      startTicks: '1',
+      bounds: { x: 0, y: 0, width: 800, height: 600 }
+    }
+    respond = (request) => ({
+      id: request.id,
+      ok: true,
+      windows: [],
+      foreground: '71',
+      editorText: 'Q',
+      occluded: true,
+      searchOccluded: false
+    })
+    expect(await value.typeSearch(binding, 'Q', signal)).toBe('Q')
+    expect(await value.typeText(binding, 'Q', signal)).toBe('Q')
+    expect(children[0].requests.map((request) => request.command)).toEqual(['type_search', 'type'])
   })
   it('waits for a cancelled paste to restore the clipboard before rejecting, without killing or retrying it', async () => {
     const value = bridge(),

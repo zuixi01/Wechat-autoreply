@@ -124,6 +124,25 @@ function fixture(count = 15, persisted?: SqliteForegroundJournal) {
   }
 }
 describe('foreground batch scanning and processing', () => {
+  it('uses independently verified target discovery without traversing unrelated conversations', async () => {
+    const f = fixture(12)
+    Object.assign(f.navigator, {
+      inventory: vi.fn(async () => structuredClone(f.rows.slice(0, 8)))
+    })
+    f.navigator.down = vi.fn(async () => {
+      throw new Error('must_not_scan_unrelated')
+    })
+    await f.runtime.start(['客户0', '客户1'])
+    for (let i = 0; i < 3; i++) await f.runtime.tick()
+    expect(
+      f.records
+        .filter((r) => r.state === 'sent')
+        .map((r) => r.target)
+        .sort()
+    ).toEqual(['客户0', '客户1'])
+    expect(f.navigator.down).not.toHaveBeenCalled()
+    await f.runtime.pause()
+  })
   it('revalidates uniqueness when a new unread row has a previously known title', async () => {
     const f = fixture(2)
     f.rows[1].unread = 0
@@ -322,6 +341,38 @@ describe('foreground batch scanning and processing', () => {
       db.close()
     }
   })
+  it('reconciles saved single progress once even after its unread badge was manually cleared', async () => {
+    const db = new SqliteForegroundJournal(':memory:'),
+      f = fixture(2, db)
+    try {
+      const old = structuredClone(f.observations.get('客户0')!)
+      db.saveSingle({ baseline: old, ownEcho: '上次已发送', pending: false })
+      f.observations
+        .get('客户0')!
+        .messages.push(
+          { direction: 'outbound', text: '上次已发送' },
+          { direction: 'inbound', text: '打开后还没回复的问题' }
+        )
+      f.rows[0].unread = 0
+      f.rows[0].preview = '打开后还没回复的问题'
+      await f.runtime.start(['客户0', '客户1'])
+      for (let i = 0; i < 6; i++) await f.runtime.tick()
+      expect(
+        f.records.filter((r) => r.target === '客户0' && r.state === 'sent').map((r) => r.question)
+      ).toEqual(['打开后还没回复的问题'])
+      expect(f.records.filter((r) => r.target === '客户1' && r.state === 'sent')).toHaveLength(1)
+      const before = vi
+        .mocked(f.navigator.open)
+        .mock.calls.filter(([r]) => r.name === '客户0').length
+      for (let i = 0; i < 3; i++) await f.runtime.tick()
+      expect(
+        vi.mocked(f.navigator.open).mock.calls.filter(([r]) => r.name === '客户0')
+      ).toHaveLength(before)
+    } finally {
+      await f.runtime.pause()
+      db.close()
+    }
+  })
   it('switches to dot conversations and preserves ambiguous older text as a handoff', async () => {
     const f = fixture(2)
     f.rows[0].unread = null
@@ -460,6 +511,20 @@ describe('foreground batch scanning and processing', () => {
     expect(rows).toHaveLength(500)
     expect(new Set(rows.map((row) => row.name)).size).toBe(500)
   })
+  it('keeps scanning when the exact same physical overlapping row has inconsistent OCR punctuation', async () => {
+    const f = fixture(12)
+    f.rows.forEach((row) => {
+      row.pixelIdentity = randomUUID()
+    })
+    const down = f.navigator.down
+    f.navigator.down = async (signal) => {
+      f.rows[6].name += ' '
+      await down(signal)
+    }
+    const rows = await scanForegroundList(f.navigator, new AbortController().signal)
+    expect(rows).toHaveLength(12)
+    expect(new Set(rows.map((row) => row.pixelIdentity)).size).toBe(12)
+  })
   it('processes 500 allowed conversations serially and does not reply again on rescan', async () => {
     const database = new SqliteForegroundJournal(':memory:'),
       f = fixture(500, database)
@@ -551,6 +616,18 @@ describe('foreground batch scanning and processing', () => {
     await f.runtime.tick()
     expect(f.records.map((record) => record.target)).toEqual(['客户0'])
   })
+  it('does not restart a full inventory scan just because an unrelated known name is truncated', async () => {
+    const f = fixture(12)
+    f.rows[0].name = '无关的长群名称…'
+    f.rows[0].nameComplete = false
+    await f.runtime.start(['客户1'])
+    await f.runtime.tick()
+    const calls = vi.mocked(f.navigator.down).mock.calls.length
+    await f.runtime.tick()
+    expect(vi.mocked(f.navigator.down).mock.calls.length).toBe(calls)
+    expect(f.records.filter((record) => record.state === 'sent')).toHaveLength(1)
+    await f.runtime.pause()
+  })
   it('isolates a target when a truncated name might refer to the same allowed contact', async () => {
     const f = fixture()
     f.rows[14].name = '客户…'
@@ -603,7 +680,7 @@ describe('foreground batch scanning and processing', () => {
     })
     expect(f.records).toHaveLength(0)
   })
-  it('restarts an unstable inventory without opening any chat', async () => {
+  it('backs off an unstable inventory without opening any chat', async () => {
     const f = fixture()
     vi.mocked(f.navigator.down).mockImplementationOnce(async () => {
       f.rows[0].preview = '排序已变化'
@@ -612,7 +689,7 @@ describe('foreground batch scanning and processing', () => {
     await f.runtime.start(['客户0'])
     await f.runtime.tick()
     expect(f.runtime.status()).toMatchObject({
-      state: 'scanning',
+      state: 'recovering',
       reason: 'list_changed',
       scanComplete: false
     })

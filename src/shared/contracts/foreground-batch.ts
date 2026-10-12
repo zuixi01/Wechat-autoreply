@@ -24,6 +24,7 @@ export const BatchStartSchema = z.strictObject({
 export const ListRowSchema = z.strictObject({
   name,
   nameComplete: z.boolean(),
+  pixelIdentity: z.string().uuid().optional(),
   preview: z.string().max(4096),
   unread: z.number().int().min(0).max(9999).nullable(),
   unreadDot: z.boolean().optional(),
@@ -53,6 +54,8 @@ export interface BatchNavigator {
   page(signal: AbortSignal): Promise<ListPage>
   down(signal: AbortSignal): Promise<void>
   open(row: ListRow, signal: AbortSignal): Promise<void>
+  /** Returns only after every visible target has an independent uniqueness check. */
+  inventory?(targets: string[], signal: AbortSignal): Promise<ListRow[] | undefined>
 }
 export const BatchStatusSchema = z.strictObject({
   state: z.enum([

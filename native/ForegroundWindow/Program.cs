@@ -70,20 +70,21 @@ internal static class Program {
     using var document=JsonDocument.Parse(line);var root=document.RootElement;id=root.GetProperty("id").GetString();if(!Guid.TryParse(id,out _)) throw new Exception("request_invalid");
     var command=root.GetProperty("command").GetString();var windows=Windows();
     string? editorText=null;
-    if(command is "focus" or "type" or "read_editor" or "paste_image") {
+    if(command is "focus" or "type" or "type_search" or "read_editor" or "paste_image") {
      var expected=JsonSerializer.Deserialize<Binding>(root.GetProperty("binding").GetRawText(),Json);
      var selected=windows.SingleOrDefault(w=>w==expected);if(selected==null) throw new Exception("window_changed");
      var handle=(nint)long.Parse(selected.Id);
      if(command=="focus") {
       if(IsIconic(handle)) ShowWindow(handle,9);SetForegroundWindow(handle);
      } else {
-      var text=command=="type"?root.GetProperty("text").GetString():null;if(text!=null) UnicodeInput.Validate(text);
+      var typing=command is "type" or "type_search";
+      var text=typing?root.GetProperty("text").GetString():null;if(text!=null) UnicodeInput.Validate(text);
       if(nint.Size!=8 || Marshal.SizeOf<GuiThreadInfo>()!=72) throw new Exception("input_failed");
       var editor=Editor(handle,selected.Pid);
       void Guard() {
        if(!Windows().Any(value=>value==selected)) throw new Exception("window_changed");
        if(Editor(handle,selected.Pid)!=editor) throw new Exception("input_state_changed");
-       if(SurfaceProbe.IsBlocked(handle,selected.Bounds)) throw new Exception("screen_obscured");
+       if(SurfaceProbe.IsBlocked(handle,selected.Bounds,command=="type_search")) throw new Exception("screen_obscured");
       }
       using var transfer=new ClipboardInput();
       if(command=="paste_image") {
@@ -91,14 +92,15 @@ internal static class Program {
        if(encoded==null || encoded.Length>1400000) throw new Exception("image_invalid");
        transfer.PasteImage(Convert.FromBase64String(encoded),(key,control)=>Shortcut(key,control,Guard),Guard);
       } else
-      editorText=command=="type"
+      editorText=typing
        ?transfer.Paste(text!,selected.Pid,(key,control)=>Shortcut(key,control,Guard),Guard)
        :transfer.CopyEditor(selected.Pid,(key,control)=>Shortcut(key,control,Guard),Guard);
      }
     } else if(command!="inspect") throw new Exception("request_invalid");
     var current=Windows();var foreground=Foreground();var active=current.SingleOrDefault(value=>value.Id==foreground);
     var occluded=active!=null && SurfaceProbe.IsBlocked((nint)long.Parse(active.Id),active.Bounds);
-    Console.WriteLine(JsonSerializer.Serialize(new {id,ok=true,windows=current,foreground,editorText,occluded},Json));
+    var searchOccluded=active!=null && SurfaceProbe.IsBlocked((nint)long.Parse(active.Id),active.Bounds,true);
+    Console.WriteLine(JsonSerializer.Serialize(new {id,ok=true,windows=current,foreground,editorText,occluded,searchOccluded},Json));
    } catch(Exception e) {var code=e.Message is "request_invalid" or "window_changed" or "foreground_lost" or "text_invalid" or "image_invalid" or "input_failed" or "input_state_changed" or "clipboard_unavailable" or "clipboard_state_changed" or "editor_text_unavailable" or "screen_obscured"?e.Message:"window_query_failed";Console.WriteLine(JsonSerializer.Serialize(new{id,ok=false,error=code},Json));}
    Console.Out.Flush();
   }

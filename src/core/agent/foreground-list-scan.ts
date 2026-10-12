@@ -3,7 +3,8 @@ import type { BatchNavigator, ListRow } from '../../shared/contracts/foreground-
 
 export const rowKey = (row: ListRow): string =>
   hashContext([row.name, row.nameComplete, row.preview, row.unread, Boolean(row.unreadDot)])
-const identityKey = (row: ListRow): string => hashContext([row.name, row.nameComplete])
+const identityKey = (row: ListRow): string =>
+  row.pixelIdentity ?? hashContext([row.name, row.nameComplete])
 export const mayMatchTruncatedName = (row: ListRow, name: string): boolean =>
   !row.nameComplete && name.startsWith(row.name.replace(/(?:\.\.\.|…)$/, '').trim())
 /** A traversed screenshot list is not a directory of stable native customer IDs. */
