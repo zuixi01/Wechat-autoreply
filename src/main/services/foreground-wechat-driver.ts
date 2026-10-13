@@ -168,10 +168,16 @@ const pixelPollDelays = [37, 73, 109, 151, 83, 127, 59] as const
 const pixelPollDelay = (attempt: number, remaining: number): number =>
   Math.min(pixelPollDelays[attempt % pixelPollDelays.length], remaining)
 
+/** One IPC runtime shares only confirmed endpoint capabilities, never chat evidence. */
+export interface ForegroundModelCompatibility {
+  unsupportedReasoning: Set<string>
+  unsupportedStructuredVision: Set<string>
+}
+
 /** Desktop input belongs to this Electron main process. It is independent of Codex tools. */
 export class ForegroundWechatDriver implements ForegroundDriver {
-  private readonly unsupportedReasoning = new Set<string>()
-  private readonly unsupportedStructuredVision = new Set<string>()
+  private readonly unsupportedReasoning: Set<string>
+  private readonly unsupportedStructuredVision: Set<string>
   manual(observation: ForegroundObservation, messages: ForegroundObservation['messages']): void {
     this.configuration().manual?.(observation, messages)
   }
@@ -265,8 +271,13 @@ export class ForegroundWechatDriver implements ForegroundDriver {
   }
   constructor(
     private readonly configuration: () => ForegroundConfiguration,
-    private readonly windows: ForegroundWindows = new ForegroundWindowBridge()
-  ) {}
+    private readonly windows: ForegroundWindows = new ForegroundWindowBridge(),
+    compatibility?: ForegroundModelCompatibility
+  ) {
+    this.unsupportedReasoning = compatibility?.unsupportedReasoning ?? new Set<string>()
+    this.unsupportedStructuredVision =
+      compatibility?.unsupportedStructuredVision ?? new Set<string>()
+  }
   private chatWindows(windows: ForegroundWindow[]): ForegroundWindow[] {
     const wechat = windows.filter((window) => /\\(?:Weixin|WeChat)\.exe$/i.test(window.path))
     if (wechat.length <= 1) return wechat

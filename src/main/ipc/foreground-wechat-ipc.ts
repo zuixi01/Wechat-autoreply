@@ -40,6 +40,10 @@ export function registerForegroundWechatIpc(
     (text) => journal.isGenerated(text)
   )
   const stickers = new PersonalStickerStore(join(userData, 'agent', 'stickers'))
+  const modelCompatibility = {
+    unsupportedReasoning: new Set<string>(),
+    unsupportedStructuredVision: new Set<string>()
+  }
   let closed = false
   let listTarget = 'Q'
   const configured = (target: string): ForegroundConfiguration => ({
@@ -60,17 +64,25 @@ export function registerForegroundWechatIpc(
       })
     }
   })
-  const personalDriver = new ForegroundWechatDriver(() => configured(runtime.activity().target))
+  const personalDriver = new ForegroundWechatDriver(
+    () => configured(runtime.activity().target),
+    undefined,
+    modelCompatibility
+  )
   const runtime = new ForegroundWechatRuntime(personalDriver, journal, true, (value) =>
     journal.saveSingle(value)
   )
   const batch = new ForegroundBatchRuntime(
     new ForegroundBatchNavigator(
-      new ForegroundWechatDriver(() => configured(listTarget)),
+      new ForegroundWechatDriver(() => configured(listTarget), undefined, modelCompatibility),
       () => listTarget
     ),
     (target) => {
-      const driver = new ForegroundWechatDriver(() => configured(target))
+      const driver = new ForegroundWechatDriver(
+        () => configured(target),
+        undefined,
+        modelCompatibility
+      )
       return {
         connect: (_target, signal) => driver.connect(target, signal, 'current_chat', false),
         metrics: () => driver.metrics(),

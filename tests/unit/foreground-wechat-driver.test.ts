@@ -440,6 +440,55 @@ describe('project foreground sender boundaries', () => {
     expect(f.type).not.toHaveBeenCalled()
     expect(f.tap).not.toHaveBeenCalled()
   })
+  it('shares confirmed provider format compatibility across contact drivers without sharing observations', async () => {
+    const compatibility = {
+      unsupportedReasoning: new Set<string>(),
+      unsupportedStructuredVision: new Set<string>()
+    }
+    let structured = 0
+    f.fetch.mockImplementation(async (_url, request) => {
+      const body = JSON.parse(request.body)
+      if (body.response_format?.type === 'json_schema') {
+        structured++
+        return response([])
+      }
+      return response(visual())
+    })
+    const first = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows,
+      compatibility
+    )
+    const second = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows,
+      compatibility
+    )
+    const signal = controller().signal
+    await advance(first.connect('Q', signal, 'current_chat'))
+    await advance(second.connect('Q', signal, 'current_chat'))
+    expect((await advance(first.read(signal, true))).contact).toBe('Q')
+    expect((await advance(second.read(signal, true))).contact).toBe('Q')
+    expect(structured).toBe(1)
+    expect(f.fetch).toHaveBeenCalledTimes(3)
+    // A new credential/model endpoint must negotiate independently.
+    const third = new ForegroundWechatDriver(
+      () => ({
+        vision: { ...model, apiKey: 'another-synthetic-key' },
+        reply: model,
+        rules: '回复',
+        revision: f.revision
+      }),
+      windows,
+      compatibility
+    )
+    await advance(third.connect('Q', signal, 'current_chat'))
+    await advance(third.read(signal, true))
+    expect(structured).toBe(2)
+    expect(f.fetch).toHaveBeenCalledTimes(5)
+    expect(f.type).not.toHaveBeenCalled()
+    expect(f.tap).not.toHaveBeenCalled()
+  })
   it('generates a reply without spending the entire token budget on hidden reasoning', async () => {
     const t = await connected()
     f.fetch.mockImplementation(async (_url, request) =>
