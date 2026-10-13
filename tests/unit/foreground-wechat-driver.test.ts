@@ -1123,6 +1123,46 @@ describe('project foreground sender boundaries', () => {
       expect(f.tap.mock.calls.filter(([key]) => key === 'enter')).toHaveLength(1)
     }
   )
+  it.each(['before_input', 'draft_validation', 'before_enter'])(
+    'finds an exact recurring frame without locking sampling to its period at %s',
+    async (stage) => {
+      const t = await connected(),
+        text = '测试回复'
+      const periodic = () => {
+        const original = Buffer.from(f.png),
+          start = Date.now()
+        changeScreen()
+        const other = Buffer.from(f.png)
+        f.inspectEffect = () => {
+          const phase = (Date.now() - start) % 100
+          if (phase >= 50 && phase < 80) {
+            f.png = original
+            f.inspectEffect = undefined
+          } else f.png = other
+        }
+      }
+      if (stage === 'before_input') periodic()
+      f.type.mockImplementationOnce(() => {
+        if (stage === 'draft_validation') periodic()
+        return text
+      })
+      f.readEditor.mockImplementationOnce(async () => {
+        if (stage === 'before_enter') periodic()
+        return text
+      })
+      f.fetch.mockResolvedValueOnce(
+        response(
+          visual('', [
+            { direction: 'inbound', text: '问题' },
+            { direction: 'outbound', text }
+          ])
+        )
+      )
+      expect(await advance(t.driver.dispatch(t.observation, text, t.signal))).toBe('sent')
+      expect(f.type).toHaveBeenCalledTimes(1)
+      expect(f.tap.mock.calls.filter(([key]) => key === 'enter')).toHaveLength(1)
+    }
+  )
   it('bounds a persistent paste-context change and never reads or sends its draft', async () => {
     const t = await connected(),
       text = '测试回复'

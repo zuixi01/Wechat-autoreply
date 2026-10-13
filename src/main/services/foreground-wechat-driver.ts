@@ -162,6 +162,12 @@ const wait = (ms: number, signal: AbortSignal): Promise<void> =>
     signal.addEventListener('abort', abort, { once: true })
   })
 
+// Vary bounded polling so a recurring animation frame is not consistently
+// missed at a fixed cadence. All comparisons still require exact pixels.
+const pixelPollDelays = [37, 73, 109, 151, 83, 127, 59] as const
+const pixelPollDelay = (attempt: number, remaining: number): number =>
+  Math.min(pixelPollDelays[attempt % pixelPollDelays.length], remaining)
+
 /** Desktop input belongs to this Electron main process. It is independent of Codex tools. */
 export class ForegroundWechatDriver implements ForegroundDriver {
   private readonly unsupportedReasoning = new Set<string>()
@@ -951,7 +957,7 @@ export class ForegroundWechatDriver implements ForegroundDriver {
         break
       const remaining = deadline - Date.now()
       if (remaining <= 0) break
-      await wait(Math.min(100, remaining), signal)
+      await wait(pixelPollDelay(attempt, remaining), signal)
       capture = await this.capture(signal)
     }
     return capture
@@ -1938,7 +1944,7 @@ export class ForegroundWechatDriver implements ForegroundDriver {
           break
         }
         const remaining = enterDeadline - Date.now()
-        if (attempt < 39 && remaining > 0) await wait(Math.min(100, remaining), signal)
+        if (attempt < 39 && remaining > 0) await wait(pixelPollDelay(attempt, remaining), signal)
       }
       if (!dispatchStarted) {
         console.warn('[ForegroundWechat] send_guard:before_enter_pixels_changed')
@@ -2131,7 +2137,7 @@ export class ForegroundWechatDriver implements ForegroundDriver {
           break
         }
         const remaining = enterDeadline - Date.now()
-        if (attempt < 39 && remaining > 0) await wait(Math.min(100, remaining), signal)
+        if (attempt < 39 && remaining > 0) await wait(pixelPollDelay(attempt, remaining), signal)
       }
       if (!stableDraft) throw new Error('send_screen_changed')
       const historyArea = evidence.visual.history

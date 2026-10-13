@@ -318,6 +318,89 @@ describe('project-owned foreground WeChat runtime', () => {
     ])
     await f.runtime.pause()
   })
+  it('does not spend the pre-input pixel recovery budget on earlier model timeouts', async () => {
+    const f = fixture()
+    await f.runtime.start('Q')
+    f.set(observation([msg('历史消息'), msg('需要恢复的问题')]))
+    for (let attempt = 0; attempt < 4; attempt++) {
+      vi.mocked(f.driver.generate).mockRejectedValueOnce(new Error('model_timeout'))
+      await f.runtime.tick()
+    }
+    f.driver.dispatchFailure = () => ({
+      failureReason: 'send_screen_changed',
+      failureStage: 'before_input'
+    })
+    vi.mocked(f.driver.dispatch).mockResolvedValueOnce('not_sent')
+    await f.runtime.tick()
+    expect(f.runtime.status()).toMatchObject({
+      state: 'recovering',
+      reason: 'send_screen_changed',
+      recoveryAttempts: 1
+    })
+    await f.runtime.tick()
+    expect(
+      f.records.filter((record) => record.state === 'sent').map((record) => record.question)
+    ).toEqual(['需要恢复的问题'])
+    await f.runtime.pause()
+  })
+  it('keeps the independent pixel-refusal budget bounded across intervening network failures', async () => {
+    const f = fixture()
+    await f.runtime.start('Q')
+    f.set(observation([msg('历史消息'), msg('不能绕过画面变化的问题')]))
+    f.driver.dispatchFailure = () => ({
+      failureReason: 'send_screen_changed',
+      failureStage: 'before_input'
+    })
+    vi.mocked(f.driver.dispatch).mockResolvedValue('not_sent')
+    for (let refusal = 0; refusal < 4; refusal++) {
+      if (refusal) {
+        vi.mocked(f.driver.generate).mockRejectedValueOnce(new Error('model_timeout'))
+        await f.runtime.tick()
+      }
+      await f.runtime.tick()
+      expect(f.runtime.status().state).toBe(refusal < 3 ? 'recovering' : 'paused')
+    }
+    expect(f.driver.dispatch).toHaveBeenCalledTimes(4)
+    expect(f.records.every((record) => record.state === 'not_sent')).toBe(true)
+    await f.runtime.pause()
+  })
+  it.each(['handoff', 'human_reply'] as const)(
+    'starts a fresh pixel recovery budget after the previous task ends by %s',
+    async (ending) => {
+      const f = fixture()
+      await f.runtime.start('Q')
+      f.set(observation([msg('历史消息'), msg('第一个问题')]))
+      f.driver.dispatchFailure = () => ({
+        failureReason: 'send_screen_changed',
+        failureStage: 'before_input'
+      })
+      vi.mocked(f.driver.dispatch).mockResolvedValue('not_sent')
+      for (let attempt = 0; attempt < 3; attempt++) await f.runtime.tick()
+      if (ending === 'handoff') {
+        vi.mocked(f.driver.generate).mockResolvedValueOnce(null)
+        await f.runtime.tick()
+        f.set(observation([msg('历史消息'), msg('第一个问题'), msg('第二个问题')]))
+      } else {
+        f.set(
+          observation([
+            msg('历史消息'),
+            msg('第一个问题'),
+            msg('本人已答', 'outbound'),
+            msg('第二个问题')
+          ])
+        )
+        await f.runtime.tick()
+      }
+      await f.runtime.tick()
+      expect(f.runtime.status()).toMatchObject({
+        state: 'recovering',
+        reason: 'send_screen_changed',
+        recoveryAttempts: 1
+      })
+      expect(f.records.filter((record) => record.state === 'not_sent')).toHaveLength(4)
+      await f.runtime.pause()
+    }
+  )
   it.each([
     'model_timeout',
     'model_network_failed',

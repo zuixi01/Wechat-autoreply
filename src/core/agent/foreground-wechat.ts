@@ -117,6 +117,7 @@ export class ForegroundWechatRuntime {
   private work?: Promise<void>
   private timer?: ReturnType<typeof setTimeout>
   private recoveryAttempts = 0
+  private preInputRefusals = 0
   private lastReplyDurationMs?: number
   private nextRetryAt?: number
   private connection?: {
@@ -176,6 +177,7 @@ export class ForegroundWechatRuntime {
       return this.stopWith('send_unknown')
     this.reason = 'none'
     this.recoveryAttempts = 0
+    this.preInputRefusals = 0
     this.nextRetryAt = undefined
     this.state = 'connecting'
     this.ownEcho = restored?.ownEcho
@@ -561,6 +563,7 @@ export class ForegroundWechatRuntime {
         this.pendingWork = additions
           .slice(lastHuman + 1)
           .some((message) => message.direction === 'inbound')
+        this.preInputRefusals = 0
         this.changed()
         throw new Error('human_reply')
       }
@@ -597,6 +600,7 @@ export class ForegroundWechatRuntime {
         }
         this.pendingWork = false
         this.recoveryAttempts = 0
+        this.preInputRefusals = 0
         this.changed()
         return
       }
@@ -638,6 +642,7 @@ export class ForegroundWechatRuntime {
         }
         this.pendingWork = false
         this.recoveryAttempts = 0
+        this.preInputRefusals = 0
         if (this.journal.complete)
           this.journal.complete(handoff, { baseline: next, pending: false })
         else this.journal.save(handoff)
@@ -719,9 +724,10 @@ export class ForegroundWechatRuntime {
             ['send_screen_changed', 'foreground_lost', 'window_query_failed'].includes(
               failure.failureReason ?? ''
             ) &&
-            this.recoveryAttempts < 3
+            this.preInputRefusals < 3
           ) {
-            this.recoveryAttempts++
+            this.preInputRefusals++
+            this.recoveryAttempts = this.preInputRefusals
             this.state = 'recovering'
             this.reason = failure.failureReason!
           } else this.stopWith(failure?.failureReason ?? 'send_cancelled')
@@ -755,6 +761,7 @@ export class ForegroundWechatRuntime {
     }
     this.pendingWork = Boolean(this.delivery)
     this.recoveryAttempts = 0
+    this.preInputRefusals = 0
     this.lastReplyDurationMs = Date.now() - started
     if (record) {
       const checkpoint = {
