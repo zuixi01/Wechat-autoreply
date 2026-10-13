@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto'
 import { ownerStyleKey } from '../../shared/reply-persona'
 const BatchCheckpointSchema = z.strictObject({
   row: ListRowSchema,
+  boundaryUnknown: z.boolean().optional(),
   checkpoint: ForegroundCheckpointSchema.optional()
 })
 
@@ -219,7 +220,7 @@ export class SqliteForegroundJournal implements ForegroundJournal, ForegroundBat
   loadBatch(
     targets: string[],
     includeCompleted = false
-  ): { row: ListRow; checkpoint?: ForegroundCheckpoint }[] {
+  ): { row: ListRow; checkpoint?: ForegroundCheckpoint; boundaryUnknown?: boolean }[] {
     if (!targets.length) return []
     return this.db
       .prepare(
@@ -236,8 +237,8 @@ export class SqliteForegroundJournal implements ForegroundJournal, ForegroundBat
         return value
       })
   }
-  saveBatchHint(row: ListRow): void {
-    const value = BatchCheckpointSchema.parse({ row })
+  saveBatchHint(row: ListRow, boundaryUnknown?: boolean): void {
+    const value = BatchCheckpointSchema.parse({ row, boundaryUnknown })
     if (!value.row.nameComplete) throw new Error('contact_mismatch')
     this.db
       .prepare(

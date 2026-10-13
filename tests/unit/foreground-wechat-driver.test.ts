@@ -313,6 +313,62 @@ describe('project foreground sender boundaries', () => {
     expect(f.type).not.toHaveBeenCalled()
     expect(t.observation.contact).toBe('Q')
   })
+  it('rereads an invalid locator on the same screenshot before performing any search input', async () => {
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows
+    )
+    f.fetch
+      .mockResolvedValueOnce(response([{ point: [103, 62], label: 'search' }]))
+      .mockResolvedValueOnce(response({ search: [0.2, 0.1], loggedIn: true }))
+      .mockResolvedValueOnce(
+        response({
+          matches: [{ name: 'Q', privateChat: true, point: [0.2, 0.25] }],
+          hasMore: false
+        })
+      )
+    await advance(driver.connect('Q', controller().signal))
+    const requests = f.fetch.mock.calls.map(([, request]) => JSON.parse(request.body))
+    expect(requests[0].messages[1].content[1]).toEqual(requests[1].messages[1].content[1])
+    expect(f.type).toHaveBeenCalledTimes(1)
+    expect(f.type).toHaveBeenCalledWith('Q')
+    expect(f.click).toHaveBeenCalledTimes(2)
+    expect(f.tap.mock.calls.some(([key]) => key === 'enter')).toBe(false)
+  })
+  it('bounds malformed locator recovery and never interprets pixel coordinates as normalized ones', async () => {
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows
+    )
+    f.fetch.mockResolvedValue(response({ search: [103, 62], loggedIn: true }))
+    await expect(advance(driver.connect('Q', controller().signal))).rejects.toThrow(
+      'visual_response_invalid'
+    )
+    expect(f.fetch).toHaveBeenCalledTimes(2)
+    expect(f.click).not.toHaveBeenCalled()
+    expect(f.type).not.toHaveBeenCalled()
+    expect(f.tap).not.toHaveBeenCalled()
+  })
+  it('includes the exact visual schema in the prompt when a gateway ignores response_format', async () => {
+    const driver = new ForegroundWechatDriver(
+      () => ({ vision: model, reply: model, rules: '回复', revision: f.revision }),
+      windows
+    )
+    f.fetch.mockImplementation(async (_url, request) => {
+      const body = JSON.parse(request.body)
+      const schema = body.response_format.json_schema.schema
+      if (!body.messages[0].content.includes(JSON.stringify(schema)))
+        return response([{ point: [103, 62], label: 'search' }])
+      return response(
+        schema.properties.search
+          ? { search: [0.2, 0.1], loggedIn: true }
+          : { matches: [{ name: 'Q', privateChat: true, point: [0.2, 0.25] }], hasMore: false }
+      )
+    })
+    await advance(driver.connect('Q', controller().signal))
+    expect(f.type).toHaveBeenCalledWith('Q')
+    expect(f.click).toHaveBeenCalledTimes(2)
+  })
   it('falls back once only when strict structured vision is explicitly unsupported', async () => {
     let rejected = 0
     f.fetch.mockImplementation(async (_url, request) => {
@@ -2467,6 +2523,7 @@ describe('project foreground sender boundaries', () => {
     await advance(driver.connect('Q', signal, 'current_chat'))
     f.fetch
       .mockResolvedValueOnce(response({ loggedIn: true, overlay: true, chatTab: [0.04, 0.2] }))
+      .mockResolvedValueOnce(response({ point: [40, 200], label: 'chat' }))
       .mockResolvedValueOnce(response({ loggedIn: true, overlay: false, chatTab: [0.04, 0.2] }))
     await advance(driver.showChatList(signal))
     expect(f.tap.mock.calls).toEqual([['escape']])

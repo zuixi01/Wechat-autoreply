@@ -124,6 +124,341 @@ function fixture(count = 15, persisted?: SqliteForegroundJournal) {
   }
 }
 describe('foreground batch scanning and processing', () => {
+  it('refreshes unread counts if navigation changes before the first verified message boundary', async () => {
+    const f = fixture(1)
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    f.navigator.inventory = async () => structuredClone(f.rows)
+    const open = f.navigator.open
+    let stale = true
+    f.navigator.open = async (row, signal) => {
+      if (stale) {
+        stale = false
+        now += 35000
+        f.observations.get(row.name)!.messages.push({ direction: 'inbound', text: '追加的问题' })
+        Object.assign(f.rows[0], { unread: 2, preview: '追加的问题' })
+        throw new Error('list_changed')
+      }
+      await open(row, signal)
+    }
+    await f.runtime.start(['客户0'])
+    for (let turn = 0; turn < 5; turn++) await f.runtime.tick()
+    expect(
+      f.records.filter((record) => record.state === 'sent').map((record) => record.question)
+    ).toEqual(['问题0\n追加的问题'])
+    await f.runtime.pause()
+  })
+  it('retains verified queued jobs after a stale navigation frame instead of restarting inventory', async () => {
+    const f = fixture(2)
+    const release: (() => void)[] = []
+    const runtime = new ForegroundBatchRuntime(
+      f.navigator,
+      (target) => {
+        const driver = f.factory(target)
+        driver.generate = async () =>
+          new Promise<string>((resolve) => {
+            release.push(() => resolve(`回复${target}`))
+          })
+        return driver
+      },
+      f.journal,
+      false
+    )
+    let now = Date.now()
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    let inventories = 0
+    f.navigator.inventory = async (targets) => {
+      if (targets.length > 1 && ++inventories > 1) throw new Error('model_timeout')
+      return structuredClone(f.rows)
+    }
+    const open = f.navigator.open
+    let stale = true
+    let armed = false
+    f.navigator.open = async (row, signal) => {
+      if (row.name === '客户0' && armed && stale) {
+        stale = false
+        now += 35000
+        throw new Error('list_changed')
+      }
+      await open(row, signal)
+    }
+    await runtime.start(['客户0', '客户1'])
+    await runtime.tick()
+    await runtime.tick()
+    expect(release).toHaveLength(2)
+    for (const resolve of release) resolve()
+    armed = true
+    for (let turn = 0; turn < 5; turn++) await runtime.tick()
+    expect(
+      f.records
+        .filter((record) => record.state === 'sent')
+        .map((record) => record.target)
+        .sort()
+    ).toEqual(['客户0', '客户1'])
+    expect(f.maxSending()).toBe(1)
+    await runtime.pause()
+  })
+  it('rechecks the whole directory before opening a retained target after list changes', async () => {
+    const db = new SqliteForegroundJournal(':memory:'),
+      f = fixture(10, db)
+    db.saveSingle({
+      baseline: {
+        ...f.observations.get('客户0')!,
+        messages: [{ direction: 'outbound', text: '历史回复' }]
+      },
+      pending: false
+    })
+    f.navigator.inventory = async () => structuredClone(f.rows)
+    const open = f.navigator.open
+    let stale = true
+    f.navigator.open = vi.fn(async (row, signal) => {
+      if (stale) {
+        stale = false
+        f.rows.push({ ...f.rows[0] })
+        throw new Error('list_changed')
+      }
+      await open(row, signal)
+    })
+    try {
+      await f.runtime.start(['客户0', '客户1'])
+      for (let turn = 0; turn < 6; turn++) await f.runtime.tick()
+      expect(
+        f.records.filter((record) => record.target === '客户0' && record.state === 'sent')
+      ).toEqual([])
+      expect(f.runtime.status().issues).toContainEqual({
+        target: '客户0',
+        reason: 'contact_not_unique'
+      })
+      expect(
+        f.records.filter((record) => record.target === '客户1' && record.state === 'sent')
+      ).toHaveLength(1)
+    } finally {
+      await f.runtime.pause()
+      db.close()
+    }
+  })
+  it('refreshes a retained unstarted contact even when its newest preview is unchanged', async () => {
+    const db = new SqliteForegroundJournal(':memory:'),
+      f = fixture(2, db)
+    db.saveSingle({
+      baseline: {
+        ...f.observations.get('客户0')!,
+        messages: [{ direction: 'outbound', text: '历史回复' }]
+      },
+      pending: false
+    })
+    f.navigator.inventory = async () => structuredClone(f.rows)
+    const open = f.navigator.open
+    let stale = true
+    f.navigator.open = async (row, signal) => {
+      if (stale) {
+        stale = false
+        f.rows[1].unread = 2
+        f.observations.get('客户1')!.messages.push({ direction: 'inbound', text: '问题1' })
+        throw new Error('list_changed')
+      }
+      await open(row, signal)
+    }
+    try {
+      await f.runtime.start(['客户0', '客户1'])
+      for (let turn = 0; turn < 6; turn++) await f.runtime.tick()
+      expect(
+        f.records
+          .filter((record) => record.target === '客户1' && record.state === 'sent')
+          .map((record) => record.question)
+      ).toEqual(['问题1\n问题1'])
+    } finally {
+      await f.runtime.pause()
+      db.close()
+    }
+  })
+  it('lets another retained contact proceed when one identity recheck keeps timing out', async () => {
+    const db = new SqliteForegroundJournal(':memory:'),
+      f = fixture(2, db)
+    for (const row of f.rows)
+      db.saveSingle({
+        baseline: {
+          ...f.observations.get(row.name)!,
+          messages: [{ direction: 'outbound', text: '历史回复' }]
+        },
+        pending: false
+      })
+    f.navigator.inventory = async (targets) => {
+      if (targets.length === 1 && targets[0] === '客户1') throw new Error('model_timeout')
+      return structuredClone(f.rows)
+    }
+    const open = f.navigator.open
+    let stale = true
+    f.navigator.open = async (row, signal) => {
+      if (stale) {
+        stale = false
+        throw new Error('list_changed')
+      }
+      await open(row, signal)
+    }
+    try {
+      await f.runtime.start(['客户0', '客户1'])
+      for (let turn = 0; turn < 11; turn++) await f.runtime.tick()
+      expect(
+        f.records.filter((record) => record.target === '客户0' && record.state === 'sent')
+      ).toHaveLength(1)
+      expect(
+        f.records.filter((record) => record.target === '客户1' && record.state === 'sent')
+      ).toEqual([])
+    } finally {
+      await f.runtime.pause()
+      db.close()
+    }
+  })
+  it.each([0, 1, 2])(
+    're-enrolls a failed first read with safe refreshed unread progress (%s)',
+    async (unread) => {
+      const db = new SqliteForegroundJournal(':memory:'),
+        f = fixture(2, db)
+      db.saveSingle({
+        baseline: {
+          ...f.observations.get('客户0')!,
+          messages: [{ direction: 'outbound', text: '历史回复' }]
+        },
+        pending: false
+      })
+      let release!: () => void,
+        reads = 0
+      const runtime = new ForegroundBatchRuntime(
+        f.navigator,
+        (target) => {
+          const driver = f.factory(target)
+          if (target === '客户0')
+            driver.generate = () =>
+              new Promise<string>((resolve) => {
+                release = () => resolve('回复0')
+              })
+          else {
+            const read = driver.read
+            driver.read = async (signal) => {
+              if (++reads <= 2) throw new Error('model_timeout')
+              return read(signal)
+            }
+          }
+          return driver
+        },
+        f.journal,
+        false,
+        db
+      )
+      f.navigator.inventory = async () => structuredClone(f.rows)
+      try {
+        await runtime.start(['客户0', '客户1'])
+        await runtime.tick()
+        await runtime.tick()
+        release()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        const open = f.navigator.open
+        let stale = true
+        f.navigator.open = async (row, signal) => {
+          if (row.name === '客户0' && stale) {
+            stale = false
+            f.rows[1].unread = unread
+            if (unread > 0)
+              f.observations.get('客户1')!.messages.push({ direction: 'inbound', text: '问题1' })
+            throw new Error('list_changed')
+          }
+          await open(row, signal)
+        }
+        for (let turn = 0; turn < 7; turn++) await runtime.tick()
+        expect(
+          f.records
+            .filter((record) => record.target === '客户1' && record.state === 'sent')
+            .map((record) => record.question)
+        ).toEqual(['问题1'])
+        expect(
+          f.records
+            .filter((record) => record.target === '客户1' && record.state === 'handoff')
+            .map((record) => record.question)
+        ).toEqual(unread > 0 ? ['问题1'] : [])
+      } finally {
+        await runtime.pause()
+        db.close()
+      }
+    }
+  )
+  it('preserves unknown first-read scope across restart without replying to older items twice', async () => {
+    const db = new SqliteForegroundJournal(':memory:'),
+      f = fixture(1, db)
+    db.saveBatchHint(f.rows[0], true)
+    f.rows[0].unread = 0
+    f.observations.get('客户0')!.messages.push({ direction: 'inbound', text: '问题0' })
+    try {
+      expect(db.loadBatch(['客户0'])[0].boundaryUnknown).toBe(true)
+      await f.runtime.start(['客户0'])
+      for (let turn = 0; turn < 4; turn++) await f.runtime.tick()
+      expect(
+        f.records.filter((record) => record.state === 'sent').map((record) => record.question)
+      ).toEqual(['问题0'])
+      expect(
+        f.records.filter((record) => record.state === 'handoff').map((record) => record.question)
+      ).toEqual(['问题0'])
+      await f.runtime.pause()
+      await f.runtime.start(['客户0'])
+      for (let turn = 0; turn < 4; turn++) await f.runtime.tick()
+      expect(f.records.filter((record) => record.state === 'sent')).toHaveLength(1)
+      expect(f.records.filter((record) => record.state === 'handoff')).toHaveLength(1)
+    } finally {
+      await f.runtime.pause()
+      db.close()
+    }
+  })
+  it('does not turn a failed ordinary baseline read into replying to read history', async () => {
+    const f = fixture(1)
+    f.rows[0].unread = 0
+    await f.navigator.open(f.rows[0], new AbortController().signal)
+    let reads = 0
+    const runtime = new ForegroundBatchRuntime(
+      f.navigator,
+      (target) => {
+        const driver = f.factory(target),
+          read = driver.read
+        driver.read = async (signal) => {
+          if (++reads === 1) throw new Error('model_timeout')
+          return read(signal)
+        }
+        return driver
+      },
+      f.journal,
+      false
+    )
+    try {
+      await runtime.start(['客户0'])
+      for (let turn = 0; turn < 4; turn++) await runtime.tick()
+      expect(f.records).toEqual([])
+    } finally {
+      await runtime.pause()
+    }
+  })
+  it('retains unknown scope when a paused preview check later recovers', async () => {
+    const db = new SqliteForegroundJournal(':memory:'),
+      f = fixture(1, db)
+    db.saveBatchHint({ ...f.rows[0], preview: '尚未更新的预览' }, true)
+    f.rows[0].unread = 0
+    f.observations.get('客户0')!.messages.push({ direction: 'inbound', text: '新问题' })
+    try {
+      await f.runtime.start(['客户0'])
+      await f.runtime.tick()
+      expect(f.records).toEqual([])
+      f.rows[0].unread = 1
+      f.rows[0].preview = '新问题'
+      for (let turn = 0; turn < 5; turn++) await f.runtime.tick()
+      expect(
+        f.records.filter((record) => record.state === 'sent').map((record) => record.question)
+      ).toEqual(['新问题'])
+      expect(
+        f.records.filter((record) => record.state === 'handoff').map((record) => record.question)
+      ).toEqual(['问题0'])
+    } finally {
+      await f.runtime.pause()
+      db.close()
+    }
+  })
   it('refreshes for a later message from another contact while pre-input timeouts continue', async () => {
     vi.useFakeTimers()
     const f = fixture(2)
@@ -674,6 +1009,45 @@ describe('foreground batch scanning and processing', () => {
     expect(driver.dispatch).toHaveBeenCalledTimes(1)
     await runtime.pause()
   })
+  it.each([false, true])(
+    'keeps receipt verification ahead of new contacts after a stale navigation frame (recheck timeout: %s)',
+    async (timeout) => {
+      const f = fixture(2)
+      const driver: ForegroundDriver = {
+        connect: async () => {},
+        read: async () => structuredClone(f.observations.get('客户0')!),
+        generate: vi.fn(async () => '回复'),
+        dispatch: vi.fn(async () => 'unknown' as const),
+        dispatchFailure: () => ({ failureStage: 'receipt', failureReason: 'send_echo_unverified' }),
+        verifyReceipt: vi.fn(async () => 'sent' as const)
+      }
+      const runtime = new ForegroundBatchRuntime(f.navigator, () => driver, f.journal, false)
+      await runtime.start(['客户0', '客户1'])
+      await runtime.tick()
+      expect(f.records[0].state).toBe('unknown')
+      f.navigator.currentContact = () => '客户1'
+      vi.mocked(f.navigator.open).mockRejectedValueOnce(new Error('list_changed'))
+      await runtime.tick()
+      if (timeout) {
+        f.navigator.inventory = vi
+          .fn()
+          .mockRejectedValueOnce(new Error('model_timeout'))
+          .mockImplementation(async () => structuredClone(f.rows))
+        await runtime.tick()
+        expect(f.records).toHaveLength(1)
+        expect(f.records[0].state).toBe('unknown')
+        expect(runtime.status().current).toBe('客户0')
+        expect(driver.dispatch).toHaveBeenCalledTimes(1)
+      }
+      await runtime.tick()
+      expect(f.records).toHaveLength(1)
+      expect(f.records[0].state).toBe('sent')
+      expect(driver.verifyReceipt).toHaveBeenCalledTimes(1)
+      expect(driver.dispatch).toHaveBeenCalledTimes(1)
+      expect(runtime.status().reason).not.toBe('send_unknown')
+      await runtime.pause()
+    }
+  )
   it('requires an explicit allowed scope and unread processing input', () => {
     expect(BatchStartSchema.safeParse({ targets: ['Q'], foregroundConsent: true }).success).toBe(
       false

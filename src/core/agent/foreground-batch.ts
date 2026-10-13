@@ -16,9 +16,9 @@ export interface ForegroundBatchStore {
   loadBatch(
     targets: string[],
     includeCompleted?: boolean
-  ): { row: ListRow; checkpoint?: ForegroundCheckpoint }[]
+  ): { row: ListRow; checkpoint?: ForegroundCheckpoint; boundaryUnknown?: boolean }[]
   loadSingle?(target: string): ForegroundCheckpoint | undefined
-  saveBatchHint(row: ListRow): void
+  saveBatchHint(row: ListRow, boundaryUnknown?: boolean): void
   saveBatch(row: ListRow, checkpoint: ForegroundCheckpoint): void
 }
 
@@ -52,9 +52,13 @@ export class ForegroundBatchRuntime {
   private queue: ListRow[] = []
   private issues = new Map<string, string>()
   private sessions = new Map<string, ForegroundWechatRuntime>()
-  private checkpoints = new Map<string, { row: ListRow; checkpoint?: ForegroundCheckpoint }>()
+  private checkpoints = new Map<
+    string,
+    { row: ListRow; checkpoint?: ForegroundCheckpoint; boundaryUnknown?: boolean }
+  >()
   private resumeCheckpoints = new Map<string, ForegroundCheckpoint>()
   private reconcile = new Set<string>()
+  private reverify = new Set<string>()
   private knownRows: ListRow[] = []
   private lastScanAt = 0
   private queueTurns = 0
@@ -119,6 +123,7 @@ export class ForegroundBatchRuntime {
       }
     }
     this.sessions.clear()
+    this.reverify.clear()
     this.issues.clear()
     this.queue = []
     this.knownRows = []
@@ -298,6 +303,7 @@ export class ForegroundBatchRuntime {
             this.discovered = verified.length
           }
           this.lastScanAt = Date.now()
+          this.reverify.clear()
         }
         this.knownRows = rows
         if (signal.aborted) return
@@ -367,7 +373,7 @@ export class ForegroundBatchRuntime {
       }
       this.reason = 'none'
       this.nextRetryAt = undefined
-      const row = this.queue[0]
+      let row = this.queue[0]
       if (!row) {
         this.state = 'scanning'
         return
@@ -383,11 +389,81 @@ export class ForegroundBatchRuntime {
         const checkpoint = this.store?.loadSingle?.(row.name)
         if (checkpoint) this.checkpoints.set(row.name, { row, checkpoint })
       }
+      if (this.reverify.has(row.name)) {
+        // A message baseline proves history continuity, not recipient identity.
+        // Recheck global uniqueness before opening any retained queued contact.
+        let rows: ListRow[]
+        try {
+          rows =
+            (await this.navigator.inventory?.([row.name], signal)) ??
+            (await scanForegroundList(this.navigator, signal))
+        } catch (error) {
+          const code = this.code(error)
+          if (
+            code !== 'list_changed' &&
+            transient.has(code) &&
+            this.queue.length > 1 &&
+            ![...this.sessions.values()].some(
+              (session) => session.activity().reason === 'send_verifying'
+            )
+          )
+            this.queue.push(this.queue.shift()!)
+          throw error
+        }
+        if (signal.aborted) return
+        this.navigationReady = false
+        const matches = rows.filter((value) => value.nameComplete && value.name === row.name)
+        const ambiguous =
+          matches.length > 1 || rows.some((value) => mayMatchTruncatedName(value, row.name))
+        if (ambiguous || !matches.length) {
+          if (
+            [...this.sessions.values()].some(
+              (session) => session.activity().reason === 'send_verifying'
+            )
+          ) {
+            this.fail('send_unknown')
+            return
+          }
+          this.issues.set(row.name, ambiguous ? 'contact_not_unique' : 'target_not_found')
+          this.queue.shift()
+          return
+        }
+        if (
+          !this.sessions.get(row.name)?.hasBoundary() &&
+          !this.checkpoints.get(row.name)?.checkpoint
+        ) {
+          // Opening may already have consumed the badge before the first read
+          // failed. Zero unread cannot erase that persisted pending hint.
+          row =
+            matches[0].unread === 0
+              ? {
+                  ...matches[0],
+                  unread: row.unread,
+                  unreadDot: row.unreadDot,
+                  preview: row.preview
+                }
+              : matches[0]
+          this.queue[0] = row
+          const unbound = this.sessions.get(row.name)
+          if (unbound) {
+            if (this.pendingCheckpoint(row.name)) {
+              this.checkpoints.set(row.name, { row, boundaryUnknown: true })
+              this.store?.saveBatchHint(row, true)
+            }
+            await unbound.pause()
+            if (signal.aborted) return
+            this.sessions.delete(row.name)
+          }
+        }
+        this.reverify.delete(row.name)
+      }
+      const boundaryUnknown = Boolean(this.checkpoints.get(row.name)?.boundaryUnknown)
       // The badge is needed only to establish an initial unread boundary.
       // A restored/session boundary proves new messages independently of its count.
       if (
         !this.sessions.get(row.name)?.hasBoundary() &&
         !this.checkpoints.get(row.name)?.checkpoint &&
+        !boundaryUnknown &&
         ((row.unread === null && !row.unreadDot) || (row.unread !== null && row.unread > 80))
       ) {
         this.issues.set(row.name, 'unread_message_unverified')
@@ -403,8 +479,8 @@ export class ForegroundBatchRuntime {
         !this.checkpoints.get(row.name)?.checkpoint &&
         !this.sessions.has(row.name)
       ) {
-        this.store?.saveBatchHint(row)
-        this.checkpoints.set(row.name, { row })
+        this.store?.saveBatchHint(row, boundaryUnknown)
+        this.checkpoints.set(row.name, { row, boundaryUnknown })
       }
       if (row.name !== this.navigator.currentContact?.())
         await findForegroundRow(this.navigator, row, signal, verifyPreview, this.navigationReady)
@@ -413,6 +489,11 @@ export class ForegroundBatchRuntime {
       )
       this.navigationReady = true
       if (signal.aborted) return
+      const unreadHint = boundaryUnknown
+        ? { count: null, preview: row.preview }
+        : row.unread === 0
+          ? undefined
+          : { count: row.unread, preview: row.preview }
       let session = this.sessions.get(row.name)
       if (!session) {
         session = new ForegroundWechatRuntime(
@@ -430,9 +511,27 @@ export class ForegroundBatchRuntime {
         await session.start(
           row.name,
           'current_chat',
-          row.unread === 0 ? undefined : { count: row.unread, preview: row.preview },
+          unreadHint,
           this.checkpoints.get(row.name)?.checkpoint
         )
+        if (
+          !session.hasBoundary() &&
+          this.pendingCheckpoint(row.name) &&
+          transient.has(session.activity().reason)
+        ) {
+          // A failed first read cannot prove whether opening consumed the badge.
+          // Persist range uncertainty before any later attempt or restart.
+          const reason = session.activity().reason
+          this.checkpoints.set(row.name, { row, boundaryUnknown: true })
+          this.store?.saveBatchHint(row, true)
+          await session.pause()
+          if (signal.aborted) return
+          this.sessions.delete(row.name)
+          this.reverify.add(row.name)
+          if (this.queue.length > 1) this.queue.push(this.queue.shift()!)
+          this.recover(reason)
+          return
+        }
       } else if (
         session.activity().state === 'paused' &&
         ['foreground_lost', 'human_input', 'human_reply', 'unread_message_unverified'].includes(
@@ -442,7 +541,7 @@ export class ForegroundBatchRuntime {
         await session.start(
           row.name,
           'current_chat',
-          row.unread === 0 ? undefined : { count: row.unread, preview: row.preview },
+          unreadHint,
           this.checkpoints.get(row.name)?.checkpoint
         )
       }
@@ -481,8 +580,27 @@ export class ForegroundBatchRuntime {
       if (signal.aborted) return
       const code = this.code(error)
       if (code === 'list_changed') {
-        this.queue = []
-        this.complete = false
+        if (
+          this.state === 'processing' &&
+          this.complete &&
+          this.queue.length &&
+          (this.sessions.get(this.current)?.hasBoundary() ||
+            this.checkpoints.get(this.current)?.checkpoint)
+        ) {
+          // Preserve pending messages, but expire every queued recipient's
+          // directory proof. Verify each target independently on its next turn.
+          this.reverify = new Set(this.targets)
+          if (
+            this.queue.length > 1 &&
+            ![...this.sessions.values()].some(
+              (session) => session.activity().reason === 'send_verifying'
+            )
+          )
+            this.queue.push(this.queue.shift()!)
+        } else {
+          this.queue = []
+          this.complete = false
+        }
         this.recover(code)
       } else this.recover(code)
     }
