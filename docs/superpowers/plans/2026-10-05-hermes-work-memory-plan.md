@@ -82,7 +82,7 @@
 
 ## 5. 执行顺序与共同验收方法
 
-执行目录：`E:\wechat-autoreply\auto-reply`。
+执行目录：仓库根目录。
 
 顺序：**基线与反馈核验 → 配置/编辑窗口 → 持久提交 → 后台复盘 → 验证/正式发布 → 整理/遗忘 → 完整桌面闭环 → 效果评估与最终交付**。
 
@@ -93,7 +93,7 @@
 专项测试使用项目 portable Node；以下是未来实施命令，本次未执行：
 
 ```powershell
-Set-Location 'E:\wechat-autoreply\auto-reply'
+# 在克隆后的仓库根目录执行
 $learningNodeVersion = (Get-Content -LiteralPath '.node-version' -Raw).Trim()
 $learningNodeExe = Join-Path $PWD ('.local/toolchain/node-v' + $learningNodeVersion + '-win-x64/node.exe')
 git status --short

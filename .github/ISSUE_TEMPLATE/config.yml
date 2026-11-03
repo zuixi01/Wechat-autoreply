@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 使用和开发说明
+    url: https://github.com/zuixi01/Wechat-autoreply/blob/main/README.md
+    about: 环境准备、使用方法、验证命令和当前能力边界。
+  - name: 参与贡献
+    url: https://github.com/zuixi01/Wechat-autoreply/blob/main/CONTRIBUTING.md
+    about: 开发流程、检查要求和提交方式。
+  - name: 安全问题报告
+    url: https://github.com/zuixi01/Wechat-autoreply/blob/main/SECURITY.md
+    about: 请按安全政策报告敏感问题，不要在公开 Issue 中披露凭据或私人数据。

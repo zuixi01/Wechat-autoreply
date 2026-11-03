@@ -6,7 +6,7 @@
 
 迁移运维人员按顺序补齐迁移至 `033-tenant-pause-batches.sql`，更新中央管理程序。迁移不由服务自动执行，旧归档恢复后也须审核补齐。只使用独立企业管理员数据库登录，不能把数据库凭据交给员工。
 
-在 `E:\wechat-autoreply\auto-reply`，用现有管理员环境执行：
+在 仓库根目录，用现有管理员环境执行：
 
 ```powershell
 $pauseBatchId = [guid]::NewGuid().ToString()

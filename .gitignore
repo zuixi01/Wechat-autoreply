@@ -24,52 +24,16 @@ out
 ehthumbs.db
 Thumbs.db
 
-# Trained model weights (too large for Git)
-sentpredict/models/*.pt
-sentpredict/models/*.pth
-sentpredict/models/*.onnx
-
 # Python cache
 __pycache__/
 *.pyc
 *.pyo
 
-# Training outputs
-sentpredict/loss_curve.png
-sentpredict/ROC_curve.png
-
-# Embedded Python (downloaded via setup script)
-resources/python/
-
 # IDE config
 .trae/
 .codegraph/
 
-# Internal docs (not for public release)
-docs/*
-!docs/images/
-!docs/provider.en.md
-!docs/provider.md
-!docs/development-plan.zh-CN.md
-!docs/implementation-status.zh-CN.md
-!docs/development-environment.md
-!docs/ledger-recovery.zh-CN.md
-!docs/legacy-migration.zh-CN.md
-!docs/workbench-feedback.zh-CN.md
-!docs/legacy-review.zh-CN.md
-!docs/native-probe.zh-CN.md
-!docs/windows-installer.zh-CN.md
-!docs/capability-report.wechat.md
-!docs/capability-report.wework.md
-!docs/platform-probe-command.zh-CN.md
-!docs/admin-console.zh-CN.md
-!docs/bulk-pause.zh-CN.md
-!docs/account-pause.zh-CN.md
-!docs/runtime-monitoring.zh-CN.md
-!docs/device-credentials.zh-CN.md
-!docs/mainline-development.zh-CN.md
-!docs/wechat-route-research.zh-CN.md
-!docs/wework-route-research.zh-CN.md
+# Documentation is public source. Keep private notes and reports under .local/.
 
 # Generated verification output and private evaluation data
 coverage/

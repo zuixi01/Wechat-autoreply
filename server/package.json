@@ -20,7 +20,7 @@
     "jev:check": "node server/scripts/jev-check.js"
   },
   "dependencies": {
-    "zod": "4.6.5",
+    "zod": "4.6.7",
     "pg": "8.23.1"
   },
   "devDependencies": {

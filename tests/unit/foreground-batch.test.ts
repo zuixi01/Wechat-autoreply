@@ -467,7 +467,7 @@ describe('foreground batch scanning and processing', () => {
       (target) => {
         const driver = f.factory(target)
         if (target === '客户0') {
-          driver.dispatch = vi.fn(async () => {
+          driver.dispatch = vi.fn<ForegroundDriver['dispatch']>(async () => {
             vi.setSystemTime(Date.now() + 90000)
             return 'not_sent'
           })
@@ -516,7 +516,9 @@ describe('foreground batch scanning and processing', () => {
         const driver = f.factory(target)
         if (target === '客户0') {
           const send = driver.dispatch
-          driver.dispatch = vi.fn(async (...args) => (available ? send(...args) : 'not_sent'))
+          driver.dispatch = vi.fn<ForegroundDriver['dispatch']>(async (...args) =>
+            available ? send(...args) : 'not_sent'
+          )
           driver.dispatchFailure = () => ({
             failureStage: 'before_input',
             failureReason: 'model_timeout'

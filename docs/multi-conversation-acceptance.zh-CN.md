@@ -1,5 +1,7 @@
 # 多客户会话采集开发与模拟验收
 
+> 本地历史证据路径仅标识原验证记录；相关报告、截图或安装包未随仓库发布，无法通过 GitHub 访问，也不证明当前提交已重新通过检查。
+
 日期：2026-10-03。用户确认本轮覆盖微信和企业微信，先完成代码与模拟验收；本轮没有读取真实客户聊天或发送真实消息。
 
 本轮解决的是“客户列表超出一屏后，如何发现并持续处理所有客户”的采集与调度问题。核心流程已接入主进程运行生命周期：按稳定客户 ID 分页发现会话，按持久化游标轮流读取消息，将消息与游标原子写入 SQLite，再交给现有审核与统一发送流程。屏幕中的名字、红点和坐标不作为客户身份或已处理证明。
@@ -48,9 +50,9 @@
 
 本次可检查的本地报告：
 
-- [两平台多客户闭环](../.local/reports/multi-conversation/f05eb751-dafa-49c5-909f-32df38ebbc68/result.json)
-- [Electron 桌面与采集界面](../.local/reports/desktop-smoke/f0e1dbe9-88d9-47f2-99f2-19f2f86bae3d/result.json)
-- [小窗口采集显示](../.local/reports/desktop-smoke/f0e1dbe9-88d9-47f2-99f2-19f2f86bae3d/collection-small.png)
+- 两平台多客户闭环（本地历史证据：`.local/reports/multi-conversation/f05eb751-dafa-49c5-909f-32df38ebbc68/result.json`）
+- Electron 桌面与采集界面（本地历史证据：`.local/reports/desktop-smoke/f0e1dbe9-88d9-47f2-99f2-19f2f86bae3d/result.json`）
+- 小窗口采集显示（本地历史证据：`.local/reports/desktop-smoke/f0e1dbe9-88d9-47f2-99f2-19f2f86bae3d/collection-small.png`）
 
 ## 真实客户端尚待验收
 

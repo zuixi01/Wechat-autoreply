@@ -1,5 +1,7 @@
 # Jev 配对效果评测
 
+> 本地历史证据路径仅标识原验证记录；相关报告、截图或安装包未随仓库发布，无法通过 GitHub 访问，也不证明当前提交已重新通过检查。
+
 ### 离线结算逐请求关联
 
 `jev:settlements` 读取供应商适配器归一化后的私有声明，按逻辑供应商、声明的计费账号和区分大小写的请求编号关联全部 HTTP attempts，包括失败和重试。输入协议为 `jev-settlement-reconciliation-input-v1`，严格字段见 [输入与算法](settlement-reconciliation.ts)。须保留完整冻结计划、不同 run/快照的 100 校准与 200 留出、全部三臂原始 artifacts，以及每个请求最终净结算的一条记录；金额为同币种的整数百万分之一，不估算 token 价格、不换汇。`settled` 必须有非负安全整数金额，`pending` 必须为 null。当前没有供应商原始 CSV/API 解析或认证适配器，不能直接输入原始账单或把手填值视为真实费用。
@@ -192,7 +194,7 @@ npm.cmd run eval:jev -- import --tenant TENANT --account ACCOUNT --run RUN_ID --
 
 独立审核 PGlite SQL 专项 12/12 通过；最新六模式 CLI 专项 14/14 通过，覆盖 PGlite 普通登录会话、SQL 权限及 Windows 私有文件权限上的完整校准切分：100 个案例、300 臂、304 个执行文件，以及 `review-submit → import --review-id` 和导入中途真实审核修订的拒绝。报告分别为 `.local/reports/jev-blind-label-reviews-first.json` 和 `.local/reports/jev-replay-review-revision-race-final.json`；合法完整导入记录 1351 ms，中途修订拒绝记录 1491 ms，原默认 5 秒期限保留。先前 13/14 的超时失败另存 `.local/reports/jev-replay-review-revision-race-first.json`，针对关联查询的优化与 profiling 边界见 [主线安排](../../docs/mainline-development.zh-CN.md)。供应商响应均为模拟，没有真实付费请求或业务准确度结论；真实微信/企微聊天测试继续暂缓，真实供应商账单及生产部署尚未验收。
 
-新增 PostgreSQL 16 原生独立审核 6 项，与既有调用账本 4 项定向合跑，10/10 通过、零跳过、零未处理错误；[运行结果](../../.local/reports/postgres-concurrency/37ac246c-97ef-4e52-b1de-347cbe199291/result.json)确认容器已清理。使用普通 LOGIN、不同连接池及 `pg_locks` / `pg_blocking_pids` 证明真实等待，验证相同标签并发提交只产生一个回执、双审核者共享修订序列、排队提交期间映射/员工禁用会拒绝，以及核验持有 `FOR SHARE` 时禁用须等待提交。夹具保留完整 300 案例冻结计划、100 条校准案例 × 3 臂；SQL 运维角色只建立合成零调用记录，盲评包通过实际 047 封存流程，未调用供应商或聊天客户端。
+新增 PostgreSQL 16 原生独立审核 6 项，与既有调用账本 4 项定向合跑，10/10 通过、零跳过、零未处理错误；运行结果（本地历史证据：`.local/reports/postgres-concurrency/37ac246c-97ef-4e52-b1de-347cbe199291/result.json`）确认容器已清理。使用普通 LOGIN、不同连接池及 `pg_locks` / `pg_blocking_pids` 证明真实等待，验证相同标签并发提交只产生一个回执、双审核者共享修订序列、排队提交期间映射/员工禁用会拒绝，以及核验持有 `FOR SHARE` 时禁用须等待提交。夹具保留完整 300 案例冻结计划、100 条校准案例 × 3 臂；SQL 运维角色只建立合成零调用记录，盲评包通过实际 047 封存流程，未调用供应商或聊天客户端。
 
 原生测试清理前确认测试后端为零，未使用 `FORCE` 删库；hook 使用 `vi.waitFor`，驱动异常仅记录 SQLSTATE，避免序列化客户端。此前失败运行及清理修复见 [主线安排](../../docs/mainline-development.zh-CN.md)，历史报告保留。角色成员资格撤销不保证已进入 SQL 的在途调用立即终止，重新核验会检查当前角色；核验后出现的新修订仍可能使旧回执失效，最终准入须在账号锁内重查，当前审批继续关闭。
 

@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows checks
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CI: true
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Use canonical temporary paths
+        run: |
+          @'
+          const { appendFileSync, mkdirSync, realpathSync } = require('node:fs')
+          const { join } = require('node:path')
+          const root = join(process.cwd(), '.local', 'ci-temp')
+          mkdirSync(root, { recursive: true })
+          const canonical = realpathSync.native(root)
+          appendFileSync(process.env.GITHUB_ENV, 'TEMP=' + canonical + '\nTMP=' + canonical + '\n')
+          '@ | node
+      - name: Verify temporary path identity
+        run: |
+          node -e "const fs = require('node:fs'); const os = require('node:os'); const assert = require('node:assert/strict'); assert.equal(os.tmpdir().toLowerCase(), fs.realpathSync.native(os.tmpdir()).toLowerCase()); console.log('Temporary directory uses its real path.');"
+          $taskIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          Write-Output ('Token owner matches current user: ' + ($taskIdentity.Owner.Value -eq $taskIdentity.User.Value))
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Check public source files and documentation links
+        run: npm run check:source
+      - name: Check path and private-storage fixtures
+        timeout-minutes: 5
+        run: npx --no-install vitest run tests/unit/private-backup-directory.test.ts tests/unit/ledger-backup.test.ts tests/unit/runtime-timing-vault.test.ts tests/unit/native-package.test.ts
+      - name: Check types, lint and isolated tests
+        run: npm run verify
+      - name: Check native foreground input fixture
+        run: npm run test:foreground-input
+      - name: Build the application
+        run: npm run build
+      - name: Install locked service dependencies
+        run: npm --prefix server ci
+      - name: Check service types
+        run: npm --prefix server run typecheck
+      - name: Build the standalone service
+        run: npm run server:build

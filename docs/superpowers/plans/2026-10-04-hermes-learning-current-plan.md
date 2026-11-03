@@ -89,12 +89,12 @@
 
 ## 执行约定与基线
 
-执行目录为 `E:\wechat-autoreply\auto-reply`。每个任务先核对已有实现；已有行为通过检查则保留，不重复开发。缺失行为按“写失败测试 → 确认因行为缺失失败 → 最小实现 → 定向验证 → 记录证据”完成。
+执行目录为 仓库根目录。每个任务先核对已有实现；已有行为通过检查则保留，不重复开发。缺失行为按“写失败测试 → 确认因行为缺失失败 → 最小实现 → 定向验证 → 记录证据”完成。
 
 开发启动时建立 `docs/learning-memory-acceptance.md`，记录 Git 状态、实际接线、各验收项、运行命令、退出码和报告。基线和最终验证均使用以下项目工具链；此列表是未来执行命令，本次未运行：
 
 ```powershell
-Set-Location 'E:\wechat-autoreply\auto-reply'
+# 在克隆后的仓库根目录执行
 & '.\scripts\dev-tools.ps1' test
 & '.\scripts\dev-tools.ps1' run typecheck:node
 & '.\scripts\dev-tools.ps1' run typecheck:web

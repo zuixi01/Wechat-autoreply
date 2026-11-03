@@ -1,19 +1,29 @@
 # 开发环境和验证命令
 
-所有命令从项目根目录 `E:\wechat-autoreply` 执行。仓库根目录就是微信自动回复项目。
+所有命令从克隆后的仓库根目录执行；不要求固定盘符或目录名。
 
 ## 工具和启动
 
-开发要求 Windows x64、Node.js 24.21 或兼容 Node 24、.NET 10 SDK。现有工作区的便携工具位于 `.local/toolchain`，该目录不进入 Git。新克隆可使用系统工具链。
+完整开发要求 Windows x64、[.node-version](../.node-version) 指定的 Node.js 24.21.0、.NET 10 SDK、Python 3，以及包含 Windows SDK 的 Visual Studio C++ Build Tools。Node 24 下 `node-window-manager` 等窗口模块依赖 `node-gyp` 构建，缺少 C++ 工具会使 `npm ci` 失败。便携工具目录 `.local/toolchain` 不进入 Git，也不随新克隆提供；请先安装系统工具链，或自行准备对应的本地便携工具。
 
 ```powershell
 npm ci
 npm run dev
 ```
 
-开发启动及普通构建会自动准备 `native/ForegroundWindow` 窗口辅助程序，源文件变化后重新编译，并将辅助程序 SHA-256 固定到主进程。安装 RobotJS 等原生依赖时可能需要 Windows C++ 构建工具。
+`npm ci` 会安装并重建 Electron 原生依赖，不要把跳过安装脚本当作完整开发安装。开发启动及普通构建会自动准备 `native/ForegroundWindow` 窗口辅助程序，源文件变化后重新编译，并将辅助程序 SHA-256 固定到主进程。
 
-本机未将 npm 加入系统 PATH 时，可使用已有便携工具：
+只做源码或文档贡献且不具备原生工具链时，可以使用：
+
+```powershell
+npm ci --ignore-scripts
+npm run check:source
+npm run verify
+```
+
+此路径不准备 Electron 原生模块，不能验证客户端运行、桌面测试或 Windows 打包。需要这些操作前，应在完整工具链下重新执行正常 `npm ci`。检查报告须明确采用的安装路径及未验证范围。
+
+只有已经自行准备 `.local/toolchain` 中对应 Node 版本时，才可使用便携工具入口：
 
 ```powershell
 .\scripts\dev-tools.ps1 run dev
@@ -24,7 +34,10 @@ npm run dev
 
 ## 验证
 
+私有目录检查要求目录归当前用户所有。某些提升权限的管理员会话默认把新目录归管理员组所有，此时会返回 `private_backup_permissions_invalid`；本轮本机检查已复现该限制。请使用普通用户会话运行相关测试与私有存储功能，保留严格权限校验，不把这类失败当作已通过。
+
 ```powershell
+npm run check:source            # 仓库源码与文档检查，不启动微信
 npm run test:personal           # 实际驱动 + 合成桌面、本地 HTTP、真实 SQLite
 npm run test:foreground-input   # Windows 焦点结构布局与 Unicode 字符序列，不操作桌面
 npm run verify                 # 主进程/界面/服务类型、ESLint、全部日常测试
