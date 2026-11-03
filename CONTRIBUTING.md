@@ -19,6 +19,8 @@ npm run dev
 
 `npm ci` 包含 Electron 原生依赖安装和重建；Node 24 下窗口相关模块需要 `node-gyp` 编译，不能用跳过安装脚本代替完整开发安装。可选的 `.local/toolchain` 不随仓库提供，详细环境见 [开发说明](docs/development-environment.md)。
 
+请使用普通用户终端。私有资料目录须归当前用户所有；默认目录所有者为管理员组的提升权限会话会被严格权限检查拒绝，见 [环境限制](docs/development-environment.md#验证)。
+
 只做源码或文档贡献且不具备原生构建环境时，可执行 `npm ci --ignore-scripts`，再运行 `npm run check:source` 和 `npm run verify`。此方式不能用于运行客户端、桌面测试或 Windows 打包验收；PR 中应明确安装脚本未执行及未验证的范围。
 
 ## 提交改动

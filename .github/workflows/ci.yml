@@ -47,3 +47,9 @@ jobs:
         run: npm run test:foreground-input
       - name: Build the application
         run: npm run build
+      - name: Install locked service dependencies
+        run: npm --prefix server ci
+      - name: Check service types
+        run: npm --prefix server run typecheck
+      - name: Build the standalone service
+        run: npm run server:build

@@ -6,6 +6,8 @@ A Windows foreground automation client for personal WeChat, based on SightFlow a
 
 **Development preview.** The single-contact workflow has limited real-message validation. Batch mode has not completed final continuous messaging validation with two real contacts, and enterprise background messaging requires a verified platform adapter. Open-source availability does not imply production readiness. See the [personal capability report](docs/capability-report.wechat.md) and [enterprise capability report](docs/capability-report.wework.md) for the recorded scope and limitations.
 
+The dependency release gate still has unresolved advisories; see the [current release blockers](docs/releasing.md#当前依赖发布阻碍2026-11-03).
+
 ## Features and limitations
 
 - Single contact: read visible new text, generate a reply using your rules and knowledge, verify the contact/window/draft, persist a SQLite journal, send and verify the outbound echo.

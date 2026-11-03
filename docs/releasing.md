@@ -17,9 +17,23 @@ npm ci
 npm run check:source
 npm run verify
 npm run build
+npm run test:dependencies
 ```
 
 `npm ci` 需要执行 Electron 原生依赖安装脚本；Node 24 下窗口相关模块需要 Python 3 和包含 Windows SDK 的 Visual Studio C++ Build Tools 执行 `node-gyp` 编译。记录实际输出、失败和未运行项，不因已有依赖缓存而省略新克隆验证。`npm ci --ignore-scripts` 只用于源码贡献检查，不能代替发布的完整依赖安装和桌面验证。环境准备见 [开发说明](development-environment.md)。
+
+### 当前依赖发布阻碍（2026-11-03）
+
+兼容补丁已更新 Electron 44.10.1、Vite 7.3.7、Vitest 4.1.12、fast-uri 3.1.9、undici 6.29.1/7.30.1 和根目录/独立服务的 Zod 4.6.7。独立服务本轮安装审计为零告警。
+
+根项目的官方 npm registry 审计仍失败：**65 个受影响包条目（29 high、36 moderate）**，由以下两类原始 advisory 及其传递依赖产生；这不是 65 个已验证的独立产品漏洞。
+
+- Jimp 1.6.1 的插件仍依赖 Zod 3；[Zod advisory](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) 的修复范围为 4.6.6 及以上。全局强制 Zod 4 越过插件声明的兼容范围；降级 Jimp 则会破坏当前使用的 v1 图像 API。
+- 构建和开发工具仍依赖 minimatch 3/5/9/10；[minimatch advisory](https://github.com/advisories/GHSA-g3hv-75wg-m249) 的修复范围为 11.0.1 及以上。部分消费者仍将模块当作函数调用，不能直接覆盖为仅提供命名导出的新 major。
+
+现有 `test:dependencies` 要求 production/all 两种范围零告警，本轮未放宽此门槛。**依赖检查未通过前不要将 Windows 构建标为通过正式发布门槛。** 应通过上游兼容修复、经过独立验证的依赖迁移或替换解决，再重新运行完整安装、测试和打包；告警数量会随公开数据库更新，发布时必须重查。
+
+本轮对当前文档中的测试联系人标签做了匿名化，未重写旧提交；Git 历史仍保留原标签。转为公开前需确认这些历史记录可公开。若要求彻底移除，应另行审阅历史重写及协作者同步方案。
 
 ## Windows 产物
 

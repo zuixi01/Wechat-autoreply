@@ -34,6 +34,8 @@ npm run verify
 
 ## 验证
 
+私有目录检查要求目录归当前用户所有。某些提升权限的管理员会话默认把新目录归管理员组所有，此时会返回 `private_backup_permissions_invalid`；本轮本机检查已复现该限制。请使用普通用户会话运行相关测试与私有存储功能，保留严格权限校验，不把这类失败当作已通过。
+
 ```powershell
 npm run check:source            # 仓库源码与文档检查，不启动微信
 npm run test:personal           # 实际驱动 + 合成桌面、本地 HTTP、真实 SQLite
