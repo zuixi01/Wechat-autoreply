@@ -10,7 +10,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)][ValidateSet('preflight', 'verify')][string] $Suite,
-  [string] $NodeExe = (Get-Command node -CommandType Application -ErrorAction Stop).Source
+  [string] $NodeExe = (Get-Command node.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 )
 $ErrorActionPreference = 'Stop'
 $taskRoot = [IO.Path]::GetFullPath((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)))
