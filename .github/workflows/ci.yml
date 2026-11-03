@@ -58,9 +58,9 @@ jobs:
         run: npm run check:source
       - name: Check path and private-storage fixtures
         timeout-minutes: 5
-        run: ./.github/scripts/invoke-windows-tests.ps1 -Suite preflight
+        run: npx --no-install vitest run tests/unit/private-backup-directory.test.ts tests/unit/ledger-backup.test.ts tests/unit/runtime-timing-vault.test.ts tests/unit/native-package.test.ts
       - name: Check types, lint and isolated tests
-        run: ./.github/scripts/invoke-windows-tests.ps1 -Suite verify
+        run: npm run verify
       - name: Check native foreground input fixture
         run: npm run test:foreground-input
       - name: Build the application
