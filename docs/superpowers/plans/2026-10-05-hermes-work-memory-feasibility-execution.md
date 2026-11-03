@@ -45,7 +45,7 @@ MIT 允许按许可复用；若复制源码或实质提示内容，保留 [版�
 
 ## 3. 当前项目：已有基础和剩余缺口
 
-执行目录：`E:\wechat-autoreply\auto-reply`。本次只读检查，没有运行测试、构建、数据库迁移或业务模型。下表的“存在”仅表示当前源码存在，不能解释为验收通过。
+执行目录：仓库根目录。本次只读检查，没有运行测试、构建、数据库迁移或业务模型。下表的“存在”仅表示当前源码存在，不能解释为验收通过。
 
 | 能力 | 当前源码情况 | 执行重点 |
 | --- | --- | --- |
@@ -200,7 +200,7 @@ MIT 允许按许可复用；若复制源码或实质提示内容，保留 [版�
 以下是实施时命令，本次没有执行。先确认当前目录及 `.node-version`；专项使用项目便携 Node 直接运行 Vitest，避免 wrapper 吞掉测试过滤参数。
 
 ```powershell
-Set-Location -LiteralPath 'E:\wechat-autoreply\auto-reply'
+# 在克隆后的仓库根目录执行
 $learningNodeVersion = (Get-Content -LiteralPath '.node-version' -Raw).Trim()
 $learningNodeExe = Join-Path $PWD ('.local/toolchain/node-v' + $learningNodeVersion + '-win-x64/node.exe')
 & $learningNodeExe 'node_modules/vitest/vitest.mjs' run tests/integration/learning-ipc.test.ts tests/integration/learning-iteration.test.ts

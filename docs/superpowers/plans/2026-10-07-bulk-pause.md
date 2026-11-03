@@ -1,6 +1,6 @@
 # D13 企业全员暂停执行记录
 
-日期：2026-10-07，`E:\wechat-autoreply\auto-reply`，分支 `codex/reliable-agent`。上一目标轮次为实际进展：完成账号目的绑定停止确认，并通过全量 1410 项、真实 PostgreSQL 56 项、构建及 Electron 隔离启动。完整 D00–D20 目标仍在进行。
+日期：2026-10-07，仓库根目录，分支 `codex/reliable-agent`。上一目标轮次为实际进展：完成账号目的绑定停止确认，并通过全量 1410 项、真实 PostgreSQL 56 项、构建及 Electron 隔离启动。完整 D00–D20 目标仍在进行。
 
 ## 实现
 

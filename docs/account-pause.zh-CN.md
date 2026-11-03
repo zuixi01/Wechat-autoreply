@@ -6,7 +6,7 @@
 
 由独立迁移角色按顺序补齐迁移至 `032-account-pause-confirmation.sql`，再更新中央服务和员工程序。中央服务不自动迁移。旧备份恢复后须审核补齐迁移，停止确认不能解除恢复围栏。
 
-在 `E:\wechat-autoreply\auto-reply`，使用已配置的独立企业管理员数据库登录：
+在 仓库根目录，使用已配置的独立企业管理员数据库登录：
 
 ```powershell
 $pauseRequestId = [guid]::NewGuid().ToString()

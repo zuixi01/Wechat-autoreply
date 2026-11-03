@@ -1,6 +1,6 @@
 # Hermes 学习闭环 Implementation Plan
 
-> 当前状态以[集中验证报告](E:/wechat-autoreply/auto-reply/docs/learning-memory-final-verification.md)为准；下文历史过程记录保留，不能视为最新运行状态。
+> 当前状态以[集中验证报告](../../learning-memory-final-verification.md)为准；下文历史过程记录保留，不能视为最新运行状态。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. 本文是用户要求的可执行计划；本轮不执行产品开发。
 
@@ -40,7 +40,7 @@
 当前确认基线：学习相关 11 个文件 62 项通过，服务层类型检查通过。旧提案或进度文档中的历史数量与类型错误不能作为当前结论。开始实施先运行全套基线；若失败，记录原因并保留测试。
 
 ```powershell
-Set-Location 'E:\wechat-autoreply\auto-reply'
+# 在克隆后的仓库根目录执行
 & '.\scripts\dev-tools.ps1' test
 & '.\scripts\dev-tools.ps1' run typecheck:node
 & '.\scripts\dev-tools.ps1' run typecheck:web
@@ -358,4 +358,4 @@ Task 8 补充第5项新增实际前台呈现接线：renderer仅能请求绑定t
 
 联合终态补充：2026-10-07-foreground-bridge-joint-final-postgres.log退出0，选定1文件12项通过69.54s；精确PG报告0b931594-0c41-4b1b-89a8-4d01ec169ff9已独立亲读passed=true、cleanedUp=true、scope=selected。实际Electron报告foreground-evaluation/79db8d48-a0ce-4bb5-9bb2-3a9e56493e60已亲读passed=true、9HTTP/0发送/3呈现；同原DBrun88b2fb6b-0da4-42de-9b5e-a604472c5abc及封存session2f9cd770-8648-4dad-bfee-4b7a0ddb96b6的三组分别绑定不同runtime/read/呈现回执，原task/context、冻结依据、费用与主机日志在线关联通过。runner退出0/未超时/14409ms；真实PNG已由父代理视检。独立CLI verify-foreground及adjudicate-foreground通过，原packet字节/回复/用量/费用不变，派生数据只变更已核前台时延，synthetic仍insufficient。此前联合失败与60s非法夹具租约记录保留，不计有效产品红测。当前reviewable原始前台链路已有合成工程联合证据；nativePlatformVerified=false、businessEffectVerified=false，单个合成会话不是200业务样本或500ms门槛证明。原Task8仍待真实100/100/200人工资料、30独立会话/费用及最终全范围验收；本次12项选测不替代完整PG/全套。此前全局163错误/11182警告快照限制保留；父代理单次最终构建及随后完整PG/全套/场景/基础桌面检查尚待各自终态。原目标ACTIVE，未提交/推送/部署、真实收费模型或业务发送。
 
-当前完成状态和最新终态证据统一见[当前验证报告](E:/wechat-autoreply/auto-reply/docs/learning-memory-final-verification.md)。本文保留原计划及按时间记录的历史结果；历史失败、待执行和执行中描述不能代替最新结论。真实业务四门槛仍需独立真人样本及原始证据。
+当前完成状态和最新终态证据统一见[当前验证报告](../../learning-memory-final-verification.md)。本文保留原计划及按时间记录的历史结果；历史失败、待执行和执行中描述不能代替最新结论。真实业务四门槛仍需独立真人样本及原始证据。

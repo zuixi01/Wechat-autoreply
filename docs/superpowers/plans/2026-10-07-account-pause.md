@@ -1,6 +1,6 @@
 # D13 目的绑定暂停执行记录
 
-日期：2026-10-07，工作目录 `E:\wechat-autoreply\auto-reply`，分支 `codex/reliable-agent`。完整 D00–D20 目标继续进行。
+日期：2026-10-07，工作目录 仓库根目录，分支 `codex/reliable-agent`。完整 D00–D20 目标继续进行。
 
 ## 当前增量
 

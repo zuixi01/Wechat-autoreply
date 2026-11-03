@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Real sends only to 醉兮 and pp; foreground Windows.
+- Real sends only to 授权测试联系人 A and 授权测试联系人 B; foreground Windows.
 - Never replay unknown dispatch; retain exact draft and receipt checks.
 - Reuse existing dependencies and learning infrastructure.
 - Private logs, screenshots, credentials and chat text remain ignored.
@@ -64,5 +64,5 @@ Interfaces: local profile-scoped samples and bounded frozen retrieval, source pr
 ### Task 6: Release and real acceptance
 - [x] Run complete suite, node/web/service type checks and relevant lint; independent branch review.
 - [ ] Build Windows package, native and desktop smoke tests; integrate source and update desktop launcher.
-- [ ] Switch from old executable only after it exits; real 醉兮/pp acceptance for both modes, plans, image and restart.
+- [ ] Switch from old executable only after it exits; real 授权测试联系人 A/授权测试联系人 B acceptance for both modes, plans, image and restart.
 - [ ] Record finite measured results and remaining limits; commit and push authorized repository updates.

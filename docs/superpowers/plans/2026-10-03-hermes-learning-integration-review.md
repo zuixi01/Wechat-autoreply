@@ -143,7 +143,7 @@
 
 ## 执行命令
 
-以下是后续实施/验收命令，本轮未执行。工作目录为 `E:\wechat-autoreply\auto-reply`。
+以下是后续实施/验收命令，本轮未执行。工作目录为 仓库根目录。
 
 ```powershell
 & '.\scripts\dev-tools.ps1' test

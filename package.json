@@ -1,11 +1,22 @@
 {
   "name": "autoreply-desktop-agent",
   "version": "1.2.4",
+  "private": true,
   "description": "个人微信前台自动回复与企业回复服务",
   "main": "./out/main/index.js",
   "author": "autoreply-dev",
   "license": "Apache-2.0",
   "homepage": "https://github.com/zuixi01/Wechat-autoreply",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zuixi01/Wechat-autoreply.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zuixi01/Wechat-autoreply/issues"
+  },
+  "engines": {
+    "node": ">=24.21.0 <25"
+  },
   "overrides": {
     "@mapbox/node-pre-gyp": "2.0.3",
     "node-gyp": "12.4.0",
@@ -31,6 +42,7 @@
     }
   },
   "scripts": {
+    "check:source": "node scripts/check-source.mjs",
     "publish:foreground": "node scripts/publish-foreground.mjs",
     "test:workbench:feedback": "node scripts/run-desktop-smoke.mjs --latest-release --feedback-only",
     "test:native-probe": "node scripts/run-native-probe-fixture.mjs",

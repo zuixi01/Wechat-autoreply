@@ -146,7 +146,7 @@
 
 ## 现在可以执行
 
-在项目目录 `E:\wechat-autoreply\auto-reply` 执行：
+在项目目录 仓库根目录 执行：
 
 ```powershell
 npm run jev:demo

@@ -12,7 +12,7 @@
 
 ## 需求与结论
 
-按 `E:\wechat-autoreply\auto-reply` 项目的工作记忆模块理解需求。你希望系统从经历中积累经验，并根据后续反馈改进经验：第一次纠正形成 V1，相似新问题使用 V1；再次纠正形成 V2，验证通过后替换，出错可回滚。
+按 仓库根目录 项目的工作记忆模块理解需求。你希望系统从经历中积累经验，并根据后续反馈改进经验：第一次纠正形成 V1，相似新问题使用 V1；再次纠正形成 V2，验证通过后替换，出错可回滚。
 
 **可行，建议基于现有模块补齐闭环。** 自我学习在本方案中更新外部记忆与处理方法，不涉及训练模型权重或让模型修改应用代码。外部经验改善实际回复的可能性成立，但效果必须经过独立人工对照评估。
 
@@ -206,7 +206,7 @@
 以下命令供后续实施使用，本次没有执行。每条检查退出状态后再执行下一条，失败则诊断修补。
 
 ```powershell
-Set-Location -LiteralPath 'E:\wechat-autoreply\auto-reply'
+# 在克隆后的仓库根目录执行
 $learningNodeVersion = (Get-Content -LiteralPath '.node-version' -Raw).Trim()
 $learningNodeExe = Join-Path $PWD ('.local/toolchain/node-v' + $learningNodeVersion + '-win-x64/node.exe')
 

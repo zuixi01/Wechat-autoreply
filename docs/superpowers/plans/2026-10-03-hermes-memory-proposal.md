@@ -33,7 +33,7 @@
 
 ## 开始前的基线
 
-执行目录：`E:\wechat-autoreply\auto-reply`。
+执行目录：仓库根目录。
 
 当前针对性测试：5 文件、37 项通过；`typecheck:services` 失败于 `tests/integration/learning-runtime.test.ts:82`。这只是模块准备度，不证明完整产品可用。先处理此问题，再重新跑全套基线；其他既有失败单独登记，不能通过删除测试掩盖。
 

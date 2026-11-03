@@ -28,7 +28,7 @@ Hermes 的后台队列、存储格式和权限边界不能原样照搬：其部�
 
 ## 3. 当前项目真实状态
 
-执行目录：`E:\wechat-autoreply\auto-reply`，Electron、TypeScript、React、本地 SQLite，企业服务为 PostgreSQL。
+执行目录：仓库根目录，Electron、TypeScript、React、本地 SQLite，企业服务为 PostgreSQL。
 
 已有基础：
 

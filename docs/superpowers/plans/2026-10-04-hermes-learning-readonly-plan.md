@@ -51,7 +51,7 @@
 - [ ] 串行执行以下命令，保存退出码与失败原因；已有失败不能删测试掩盖。
 
 ```powershell
-Set-Location 'E:\wechat-autoreply\auto-reply'
+# 在克隆后的仓库根目录执行
 & '.\scripts\dev-tools.ps1' test
 & '.\scripts\dev-tools.ps1' run typecheck:node
 & '.\scripts\dev-tools.ps1' run typecheck:web

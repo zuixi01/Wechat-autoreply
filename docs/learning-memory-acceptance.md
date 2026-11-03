@@ -1,10 +1,10 @@
 # 持续学习工作记忆验收记录
 
-> 当前状态以[集中验证报告](E:/wechat-autoreply/auto-reply/docs/learning-memory-final-verification.md)为准；下文历史过程记录保留，不能视为最新运行状态。
+> 当前状态以[集中验证报告](learning-memory-final-verification.md)为准；下文历史过程记录保留，不能视为最新运行状态。
 
 更新日期：2026-10-07。完整开发目标仍在执行，本文不是完成证明。下方按时间保留历史运行结果，历史“尚需完成”不代表后续工作没有实现。
 
-执行位置 `E:\wechat-autoreply\auto-reply`，当前分支 `codex/reliable-agent`。共享工作区存在其他开发的未提交修改；不重置、批量暂存、部署或发送真实消息。
+执行位置 仓库根目录，当前分支 `codex/reliable-agent`。共享工作区存在其他开发的未提交修改；不重置、批量暂存、部署或发送真实消息。
 
 当前业务门槛已获用户确认：实质修改率相对下降至少 20%，学习组严重错误为 0，覆盖率下降不超过 5 个百分点，学习组 p95 减基线组 p95 不超过 500ms。真实独立人工业务样本仍未提供，业务效果保持“资料不足”。
 
@@ -440,4 +440,4 @@ Task 8 补充第5项新增实际前台呈现接线：renderer仅能请求绑定t
 
 联合终态补充：2026-10-07-foreground-bridge-joint-final-postgres.log退出0，选定1文件12项通过69.54s；精确PG报告0b931594-0c41-4b1b-89a8-4d01ec169ff9已独立亲读passed=true、cleanedUp=true、scope=selected。实际Electron报告foreground-evaluation/79db8d48-a0ce-4bb5-9bb2-3a9e56493e60已亲读passed=true、9HTTP/0发送/3呈现；同原DBrun88b2fb6b-0da4-42de-9b5e-a604472c5abc及封存session2f9cd770-8648-4dad-bfee-4b7a0ddb96b6的三组分别绑定不同runtime/read/呈现回执，原task/context、冻结依据、费用与主机日志在线关联通过。runner退出0/未超时/14409ms；真实PNG已由父代理视检。独立CLI verify-foreground及adjudicate-foreground通过，原packet字节/回复/用量/费用不变，派生数据只变更已核前台时延，synthetic仍insufficient。此前联合失败与60s非法夹具租约记录保留，不计有效产品红测。当前reviewable原始前台链路已有合成工程联合证据；nativePlatformVerified=false、businessEffectVerified=false，单个合成会话不是200业务样本或500ms门槛证明。原Task8仍待真实100/100/200人工资料、30独立会话/费用及最终全范围验收；本次12项选测不替代完整PG/全套。此前全局163错误/11182警告快照限制保留；父代理单次最终构建及随后完整PG/全套/场景/基础桌面检查尚待各自终态。原目标ACTIVE，未提交/推送/部署、真实收费模型或业务发送。
 
-当前完成状态和最新终态证据统一见[当前验证报告](E:/wechat-autoreply/auto-reply/docs/learning-memory-final-verification.md)。本文保留原计划及按时间记录的历史结果；历史失败、待执行和执行中描述不能代替最新结论。真实业务四门槛仍需独立真人样本及原始证据。
+当前完成状态和最新终态证据统一见[当前验证报告](learning-memory-final-verification.md)。本文保留原计划及按时间记录的历史结果；历史失败、待执行和执行中描述不能代替最新结论。真实业务四门槛仍需独立真人样本及原始证据。

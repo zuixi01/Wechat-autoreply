@@ -96,7 +96,7 @@
 
 | 项目     | 已确定内容                                                              |
 | -------- | ----------------------------------------------------------------------- |
-| 工作目录 | `E:\wechat-autoreply\auto-reply`，所有开发命令在此目录执行              |
+| 工作目录 | 仓库根目录，所有开发命令在此目录执行              |
 | 上游     | `https://github.com/DreDabe/auto-reply.git`                             |
 | 基线     | `main`，版本 `1.2.4`，提交 `ed1d83ebc33e9471de4b4536ffd997d789eb008f`   |
 | 已有技术 | Electron、React、TypeScript、RobotJS、视觉模型、模式配置和轨迹展示      |
@@ -584,10 +584,10 @@ D16 中央准备阶段已接入迁移 019 和独立管理员命令：账号锁�
 
 ## 启动时可以执行的命令
 
-先检查当前分支与工作区；需要创建开发分支时使用 `codex/reliable-agent`，若已存在则切换复用，不执行强制重置。仓库外层属于另一个项目，禁止在 `E:\wechat-autoreply` 根目录运行本项目的 Git 提交或依赖安装。
+先检查当前分支与工作区；需要创建开发分支时使用 `codex/reliable-agent`，若已存在则切换复用，不执行强制重置。仓库外层属于另一个项目，禁止在 仓库根目录 根目录运行本项目的 Git 提交或依赖安装。
 
 ```powershell
-Set-Location -LiteralPath 'E:\wechat-autoreply\auto-reply'
+# 在克隆后的仓库根目录执行
 git status --short
 git rev-parse --show-toplevel
 git log -1 --oneline
