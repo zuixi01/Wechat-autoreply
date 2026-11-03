@@ -50,10 +50,15 @@ jobs:
       - name: Verify temporary path identity
         run: |
           node -e "const fs = require('node:fs'); const os = require('node:os'); const assert = require('node:assert/strict'); assert.equal(os.tmpdir().toLowerCase(), fs.realpathSync.native(os.tmpdir()).toLowerCase()); console.log('Temporary directory uses its real path.');"
+          $taskIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          Write-Output ('Token owner matches current user: ' + ($taskIdentity.Owner.Value -eq $taskIdentity.User.Value))
       - name: Install locked dependencies
         run: npm ci
       - name: Check public source files and documentation links
         run: npm run check:source
+      - name: Check path and private-storage fixtures
+        timeout-minutes: 5
+        run: npm exec -- vitest run tests/unit/private-backup-directory.test.ts tests/unit/ledger-backup.test.ts tests/unit/runtime-timing-vault.test.ts tests/unit/native-package.test.ts
       - name: Check types, lint and isolated tests
         run: npm run verify
       - name: Check native foreground input fixture
