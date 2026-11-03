@@ -37,6 +37,19 @@ jobs:
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: 10.0.x
+      - name: Use canonical temporary paths
+        run: |
+          @'
+          const { appendFileSync, mkdirSync, realpathSync } = require('node:fs')
+          const { join } = require('node:path')
+          const root = join(process.cwd(), '.local', 'ci-temp')
+          mkdirSync(root, { recursive: true })
+          const canonical = realpathSync.native(root)
+          appendFileSync(process.env.GITHUB_ENV, 'TEMP=' + canonical + '\nTMP=' + canonical + '\n')
+          '@ | node
+      - name: Verify temporary path identity
+        run: |
+          node -e "const fs = require('node:fs'); const os = require('node:os'); const assert = require('node:assert/strict'); assert.equal(os.tmpdir().toLowerCase(), fs.realpathSync.native(os.tmpdir()).toLowerCase()); console.log('Temporary directory uses its real path.');"
       - name: Install locked dependencies
         run: npm ci
       - name: Check public source files and documentation links
